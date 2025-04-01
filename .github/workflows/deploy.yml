@@ -34,10 +34,10 @@ jobs:
             source ~/miniconda3/etc/profile.d/conda.sh
             if conda env list | grep -q "recsys-env"; then
                 echo "기존 환경 'recsys-env' 발견. 업데이트 진행..."
-                conda env update -f environment.yml
+                conda env update -f=environment.yml --prune
             else
                 echo "환경 'recsys-env'이 없음. 새로 생성합니다..."
-                conda env create -f environment.yml
+                conda env create -f=environment.yml
             fi
             conda activate recsys-env
             echo "환경 활성화 완료"
