@@ -27,25 +27,27 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             echo "1) 코드 업데이트"
+            echo ""
             cd ~/recsys-serving
             git pull origin prod
 
             echo "2) Conda 환경 설정"
-            source ~/miniconda3/etc/profile.d/conda.sh
             if conda env list | grep -q "recsys-env"; then
                 echo "기존 환경 'recsys-env' 발견. 업데이트 진행..."
-                conda env update -f=environment.yml --prune
+                conda env update -f=environment.yml --prune -q
             else
                 echo "환경 'recsys-env'이 없음. 새로 생성합니다..."
-                conda env create -f=environment.yml
+                conda env create -f=environment.yml -q
             fi
             conda activate recsys-env
             echo "환경 활성화 완료"
+            echo ""
 
             echo "3) 환경 변수 설정"
             export DATABASE_URL="${{ secrets.DATABASE_URL }}"
             export DATABASE_USER="${{ secrets.DATABASE_USER }}"
             export DATABASE_PASSWORD="${{ secrets.DATABASE_PASSWORD }}"
+            echo ""
 
             echo "4) 기존 FastAPI 서버 프로세스 종료"
             CURRENT_PID=$(ps -ef | grep 'uvicorn main:app' | grep -v grep | awk '{print $2}')
@@ -56,9 +58,11 @@ jobs:
             else
               echo "기존 프로세스가 실행 중이지 않음"
             fi
+            echo ""
 
             echo "5) FastAPI 새 프로세스 기동"
             nohup uvicorn main:app --host 0.0.0.0 --port 8000 > ~/logs/recsys.log 2>&1 &
+            echo ""
 
             echo "6) 헬스체크 (반복 재시도)"
             MAX_RETRIES=10
@@ -84,5 +88,6 @@ jobs:
               echo "헬스체크 최종 실패! 배포 실패 처리"
               exit 1  # GitHub Actions에서 FAIL로 표시됨
             fi
+            echo ""
 
             echo "헬스체크 통과! 프로세스 정상 구동 중."
