@@ -18,13 +18,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Miniconda
-        uses: conda-incubator/setup-miniconda@v2
-        with:
-          auto-update-conda: false
-          python-version: '3.11'
-          environment-file: environment.yml
-
       - name: SSH to EC2 and Deploy FastAPI
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -37,9 +30,15 @@ jobs:
             cd ~/recsys-serving
             git pull origin prod
 
-            echo "2) Conda 환경 활성화"
+            echo "2) Conda 환경 설정"
             source ~/miniconda3/etc/profile.d/conda.sh
-            conda activate recsys-env
+            if conda env list | grep -q "recsys-env"; then
+                echo "기존 환경 'recsys-env' 발견. 업데이트 진행..."
+                conda env update -n recsys-env -f environment.yml
+            else
+                echo "환경 'recsys-env'이 없음. 새로 생성합니다..."
+                conda create -n recsys-env -f environment.yml -y
+            fi
 
             echo "3) 환경 변수 설정"
             export DATABASE_URL="${{ secrets.DATABASE_URL }}"
