@@ -1,0 +1,59 @@
+name: Deploy FastAPI to EC2 in Tmux
+
+on:
+  push:
+    branches: [ "prod" ]
+  workflow_dispatch:
+    inputs:
+      manual_branch:
+        description: Set branch
+        required: true
+        type: string
+        default: prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: false
+          python-version: '3.11'
+          environment-file: environment.yml
+
+      - name: SSH to EC2 and Deploy FastAPI in Tmux
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            echo "1) 기존 tmux 세션 종료 (있다면)"
+            tmux kill-session -t recsys-session || true
+
+            echo "2) 새로운 tmux 세션 실행"
+            tmux new-session -d -s recsys-session sh -c '
+              echo "2-1) 코드 업데이트"
+              cd ~/recsys-serving &&
+              git pull origin prod &&
+              
+              echo "2-2) Conda 환경 활성화 및 업데이트"
+              source ~/miniconda3/etc/profile.d/conda.sh &&
+              conda activate recsys-env &&
+              conda env update -f environment.yml &&
+              
+              echo "2-3) 환경 변수 설정"
+              export DATABASE_URL="${{ secrets.DATABASE_URL }}" &&
+              export DATABASE_USER="${{ secrets.DATABASE_USER }}" &&
+              export DATABASE_PASSWORD="${{ secrets.DATABASE_PASSWORD }}" &&
+              
+              echo "2-4) FastAPI 실행"
+              uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+            '
+
+            echo "Deployment complete! FastAPI is running in tmux."

@@ -1,0 +1,10 @@
+name: recsys-env
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - fastapi
+  - uvicorn
+  - pip
+  - pip:
+      - python-dotenv  # 환경 변수 관리
