@@ -34,10 +34,10 @@ jobs:
             echo "2) Conda 환경 설정"
             if conda env list | grep -q "recsys-env"; then
                 echo "기존 환경 'recsys-env' 발견. 업데이트 진행..."
-                conda env update -f=environment.yml --prune -q
+                conda env update --file=./environment.yml --prune -q
             else
                 echo "환경 'recsys-env'이 없음. 새로 생성합니다..."
-                conda env create -f=environment.yml -q
+                conda env create --f=./environment.yml -q
             fi
             conda activate recsys-env
             echo "환경 활성화 완료"
