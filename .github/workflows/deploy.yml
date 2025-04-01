@@ -57,7 +57,32 @@ jobs:
               echo "기존 프로세스가 실행 중이지 않음"
             fi
 
-            echo "5) FastAPI 실행"
-            nohup uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+            echo "5) FastAPI 새 프로세스 기동"
+            nohup uvicorn main:app --host 0.0.0.0 --port 8000 > ~/logs/recsys.log 2>&1 &
 
-            echo "Deployment complete! FastAPI is running."
+            echo "6) 헬스체크 (반복 재시도)"
+            MAX_RETRIES=10
+            SLEEP_INTERVAL=3
+            SUCCESS="false"
+
+            for ((i=1; i<=MAX_RETRIES; i++))
+            do
+              STATUS_CODE=$(curl -f -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
+              echo "  [Retry: $i/$MAX_RETRIES] 헬스체크 응답코드: $STATUS_CODE"
+              
+              if [ "$STATUS_CODE" = "200" ]; then
+                echo "헬스체크 성공! (배포가 정상 완료되었습니다.)"
+                SUCCESS="true"
+                break
+              else
+                echo "헬스체크 실패... $SLEEP_INTERVAL초 후 재시도"
+                sleep $SLEEP_INTERVAL
+              fi
+            done
+
+            if [ "$SUCCESS" != "true" ]; then
+              echo "헬스체크 최종 실패! 배포 실패 처리"
+              exit 1  # GitHub Actions에서 FAIL로 표시됨
+            fi
+
+            echo "헬스체크 통과! 프로세스 정상 구동 중."
