@@ -39,6 +39,8 @@ jobs:
                 echo "환경 'recsys-env'이 없음. 새로 생성합니다..."
                 conda env create -f environment.yml
             fi
+            conda activate recsys-env
+            echo "환경 활성화 완료"
 
             echo "3) 환경 변수 설정"
             export DATABASE_URL="${{ secrets.DATABASE_URL }}"
