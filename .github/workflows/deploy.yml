@@ -33,31 +33,38 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            echo "1) 기존 tmux 세션 종료 (있다면)"
+            # tmux 서버가 실행되고 있는지 확인하고, 실행되어 있지 않다면 시작합니다.
+            if ! tmux ls &> /dev/null; then
+              tmux start-server
+            fi
+
+            # 기존 tmux 세션 종료 (있다면)
             tmux kill-session -t recsys-session || true
 
-            echo "2) 새로운 tmux 세션 실행"
-            tmux new-session -d -s recsys-session sh -c '
-              echo "2-1) 코드 업데이트" &&
+            # tmux 세션 내에서 실행할 명령들을 문자열로 정의합니다.
+            commands="
+              echo '2-1) 코드 업데이트' &&
               cd ~/recsys-serving &&
               git pull origin prod &&
 
-              echo "2-2) Conda 환경 활성화 및 업데이트" &&
+              echo '2-2) Conda 환경 활성화 및 업데이트' &&
               source ~/miniconda3/etc/profile.d/conda.sh &&
               conda activate recsys-env &&
               conda env update -f environment.yml &&
 
-              echo "2-3) 환경 변수 설정" &&
-              export DATABASE_URL="${{ secrets.DATABASE_URL }}" &&
-              export DATABASE_USER="${{ secrets.DATABASE_USER }}" &&
-              export DATABASE_PASSWORD="${{ secrets.DATABASE_PASSWORD }}" &&
+              echo '2-3) 환경 변수 설정' &&
+              export DATABASE_URL='${{ secrets.DATABASE_URL }}' &&
+              export DATABASE_USER='${{ secrets.DATABASE_USER }}' &&
+              export DATABASE_PASSWORD='${{ secrets.DATABASE_PASSWORD }}' &&
 
-              echo "2-4) FastAPI 실행" &&
+              echo '2-4) FastAPI 실행' &&
               export DATABASE_URL &&
               export DATABASE_USER &&
               export DATABASE_PASSWORD &&
               uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-            '
+            "
 
+            # tmux 세션을 생성하고, 명령들을 실행합니다.
+            tmux new-session -d -s recsys-session bash -c "$commands"
 
             echo "Deployment complete! FastAPI is running in tmux."
