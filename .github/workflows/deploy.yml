@@ -45,8 +45,15 @@ jobs:
             export DATABASE_USER="${{ secrets.DATABASE_USER }}"
             export DATABASE_PASSWORD="${{ secrets.DATABASE_PASSWORD }}"
 
-            echo "4) 기존 프로세스 종료"
-            pkill -f "uvicorn main:app" || true
+            echo "4) 기존 FastAPI 서버 프로세스 종료"
+            CURRENT_PID=$(ps -ef | grep 'uvicorn main:app' | grep -v grep | awk '{print $2}')
+            if [ -n "$CURRENT_PID" ]; then
+              echo "기존 프로세스($CURRENT_PID) 종료 중..."
+              kill -9 $CURRENT_PID
+              echo "기존 프로세스($CURRENT_PID) 종료 완료"
+            else
+              echo "기존 프로세스가 실행 중이지 않음"
+            fi
 
             echo "5) FastAPI 실행"
             nohup uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
