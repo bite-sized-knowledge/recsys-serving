@@ -44,6 +44,7 @@ jobs:
             echo ""
 
             echo "3) 환경 변수 설정"
+            export ENVIRONMENT="${{ secrets.ENVIRONMENT }}"
             export DB_HOST="${{ secrets.DB_HOST }}"
             export DB_PORT="${{ secrets.DB_PORT }}"
             export DB_NAME="${{ secrets.DB_NAME }}"
