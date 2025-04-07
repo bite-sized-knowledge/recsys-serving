@@ -4,3 +4,7 @@
 
 
 FastAPI 기반의 서빙 시스템
+
+```python
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
