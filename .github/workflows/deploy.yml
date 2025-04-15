@@ -57,15 +57,16 @@ jobs:
             echo ""
 
             echo "4) 기존 FastAPI 서버 프로세스 종료"
-            CURRENT_PID=$(ps -ef | grep 'python server.py' | grep -v grep | awk '{print $2}')
+            PORT=8000
+            CURRENT_PID=$(lsof -t -i :$PORT)
+
             if [ -n "$CURRENT_PID" ]; then
-              echo "기존 프로세스($CURRENT_PID) 종료 중..."
-              kill -9 $CURRENT_PID
-              echo "기존 프로세스($CURRENT_PID) 종료 완료"
+                echo "기존 프로세스($CURRENT_PID) 종료 중..."
+                kill -9 $CURRENT_PID
+                echo "기존 프로세스($CURRENT_PID) 종료 완료"
             else
-              echo "기존 프로세스가 실행 중이지 않음"
+                echo "기존 프로세스가 실행 중이지 않음"
             fi
-            echo ""
 
             echo "5) FastAPI 새 프로세스 기동"
             nohup python server.py > ~/logs/recsys.log 2>&1 &
