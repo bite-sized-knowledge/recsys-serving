@@ -68,7 +68,7 @@ jobs:
             echo ""
 
             echo "5) FastAPI 새 프로세스 기동"
-            nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > ~/logs/recsys.log 2>&1 &
+            nohup python server.py > ~/logs/recsys.log 2>&1 &
             echo ""
 
             echo "6) 헬스체크 (반복 재시도)"
