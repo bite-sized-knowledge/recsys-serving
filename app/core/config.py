@@ -1,26 +1,20 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-import os
-from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
+from functools import lru_cache
 
-if os.environ.get("ENVIRONMENT") == "dev":
-    load_dotenv()
-
-class Settings(BaseSettings):
-    # Database settings
-    DB_NAME: str
+class Config(BaseSettings):
+    ENVIRONMENT: str
     DB_HOST: str
+    DB_PORT: int
     DB_USER: str
     DB_PASSWORD: str
-    DB_PORT: int  
+    DB_NAME: str
 
-    ENVIRONMENT: str 
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
-    model_config = SettingsConfigDict(
-        env_file=None,
-        env_file_encoding="utf-8",
-        case_sensitive=False
-    )
+@lru_cache
+def get_config():
+    return Config()
 
-
-# Instantiate the settings object
-settings = Settings()
+config = get_config()
