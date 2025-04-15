@@ -1,19 +1,14 @@
 from fastapi import FastAPI
-from app.api import health
-from app.api import recommend
-from .db import Connection
+from contextlib import asynccontextmanager
+from app.db.conn import engine
+from app.api import api
 
-app = FastAPI(
-    title="Bites Recommender API",
-    description="API for recommending feeds to users based on their interests.",
-    version="1.0.0"
-)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Starting up: DB engine is ready.")
+    yield
+    print("Shutting down: DB engine will be disposed.")
+    engine.dispose()
 
-# Include routers
-app.include_router(health.router, prefix="/health", tags=["health"])
-app.include_router(recommend.router, prefix="/feeds", tags=["feeds"])
-
-# 기본 엔드포인트
-@app.get("/")
-async def root():
-    return {"message": "Bites Recommender API is running!"}
+app = FastAPI(lifespan=lifespan)
+app.include_router(api)
