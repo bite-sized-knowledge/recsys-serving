@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends 
+from fastapi import APIRouter, Depends 
 from sqlalchemy.orm.session import Session
 from sqlalchemy import text
 from app.db import get_db 
@@ -7,17 +7,23 @@ router = APIRouter()
 
 @router.get("", tags=["feeds"])
 async def recommend_feeds(
+    member_id: int,
     db: Session = Depends(get_db),
 ):
     result = db.execute(
         text(f"""
-        SELECT count(*) FROM article;
+        SELECT 
+            article_id 
+        FROM 
+            article
+        ORDER BY RAND({member_id})
+        LIMIT 10;
         """)
-    ).fetchone()[0]
+    ).fetchall()
 
 
     return {
         "articles" : [
-            result
+            row[0] for row in result
         ]
     }
