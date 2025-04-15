@@ -7,13 +7,13 @@ if os.environ.get("ENVIRONMENT") == "dev":
 
 class Settings(BaseSettings):
     # Database settings
-    DB_NAME: str
-    DB_HOST: str
-    DB_USER: str
-    DB_PASSWORD: str
-    DB_PORT: int  
+    DB_NAME: str = str(os.getenv("DB_NAME"))
+    DB_HOST: str = str(os.getenv("DB_HOST"))
+    DB_USER: str = str(os.getenv("DB_USER"))
+    DB_PASSWORD: str = str(os.getenv("DB_PASSWORD"))
+    DB_PORT: int = int(os.getenv("DB_PORT", 3306))
 
-    ENVIRONMENT: str 
+    ENVIRONMENT: str = str(os.getenv("ENVIRONMENT"))
 
     model_config = SettingsConfigDict(
         env_file=None,
