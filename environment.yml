@@ -8,6 +8,7 @@ dependencies:
       - fastapi
       - uvicorn
       - python-dotenv
+      - pymysql
       - sqlalchemy 
       - numpy
       - pandas

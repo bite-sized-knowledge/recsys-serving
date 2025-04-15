@@ -57,7 +57,7 @@ jobs:
             echo ""
 
             echo "4) 기존 FastAPI 서버 프로세스 종료"
-            CURRENT_PID=$(ps -ef | grep 'uvicorn main:app' | grep -v grep | awk '{print $2}')
+            CURRENT_PID=$(ps -ef | grep 'python server.py' | grep -v grep | awk '{print $2}')
             if [ -n "$CURRENT_PID" ]; then
               echo "기존 프로세스($CURRENT_PID) 종료 중..."
               kill -9 $CURRENT_PID
