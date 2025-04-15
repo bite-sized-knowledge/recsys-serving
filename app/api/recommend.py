@@ -16,7 +16,7 @@ async def recommend_feeds(
             article_id 
         FROM 
             article
-        ORDER BY RAND({member_id})
+        ORDER BY RAND()
         LIMIT 10;
         """)
     ).fetchall()
