@@ -14,3 +14,4 @@ dependencies:
       - pandas
       - pydantic
       - pydantic-settings
+      - sentence-transformers
