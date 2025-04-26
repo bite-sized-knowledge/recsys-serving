@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from app.db.conn import engine
+from app.db.rds_conn import engine
 from app.api import api
 
 @asynccontextmanager

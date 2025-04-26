@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.db.conn import get_sessionmaker
+from app.db.rds_conn import get_sessionmaker
 
 def get_db():
     SessionLocal = get_sessionmaker()
