@@ -173,4 +173,7 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
+# copy dynamo
+copy_dynamo.py
+
 # End of https://www.toptal.com/developers/gitignore/api/python
