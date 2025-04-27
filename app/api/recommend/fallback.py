@@ -52,7 +52,6 @@ def fallback_recommend_exploration(
         - 중복 아티클 및 keywords가 없는 아티클
 
     pool별 추출 결과를 합친 뒤, 최종 100개 후보를 무작위로 셔플하여 DB에 저장.
-    (DB에는 is_fallback=True로 삽입)
 
     Args:
         db (Session): SQLAlchemy 세션 (RDBMS)
