@@ -14,6 +14,5 @@ dependencies:
       - pandas
       - pydantic
       - pydantic-settings
-      - sentence-transformers
       - boto3
       - cryptography
