@@ -11,9 +11,6 @@ class Config(BaseSettings):
 
     DYNAMODB_REGION: str
     DYNAMODB_ENDPOINT_URL: str
-    DYNAMODB_ACCESS_KEY_ID: str
-    DYNAMODB_SECRET_ACCESS_KEY: str
-
 
     class Config:
         env_file = ".env"

@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.db.rds_conn import engine
 from app.api import api
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
