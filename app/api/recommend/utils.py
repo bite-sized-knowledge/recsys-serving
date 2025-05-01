@@ -42,12 +42,14 @@ def get_user_interest_categories(db: Session, member_id: int):
 def get_interest_category_articles(db: Session, member_id: int, exclude_ids, limit):
     # 유저의 관심 카테고리 id를 구하는 함수 필요
     user_category_ids = get_user_interest_categories(db, member_id)
+    EXCLUDE_CATEGORY_ID = 14
 
     return db.query(Article.article_id)\
         .filter(
             Article.category_id.in_(user_category_ids),
             ~Article.article_id.in_(exclude_ids),
-            Article.keywords.isnot(None)
+            Article.keywords.isnot(None),
+            Article.category_id != EXCLUDE_CATEGORY_ID,
         )\
         .order_by(func.rand())\
         .limit(limit).all()
