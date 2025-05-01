@@ -3,7 +3,6 @@ from sqlalchemy import (
     BigInteger,
     CHAR,
     DateTime,
-    ForeignKey,
     UniqueConstraint,
     Index,
     func,
@@ -24,13 +23,11 @@ class Recommendation(Base):
     )
     member_id = Column(
         BigInteger,
-        ForeignKey("member.member_id", ondelete="CASCADE"),
         nullable=False,
         comment="추천 대상 멤버 ID",
     )
     article_id = Column(
         CHAR(27, collation="utf8mb4_bin"),
-        ForeignKey("article.article_id", ondelete="CASCADE"),
         nullable=False,
         comment="추천된 아티클 ID",
     )

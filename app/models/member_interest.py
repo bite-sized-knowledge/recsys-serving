@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, ForeignKey, TIMESTAMP
+from sqlalchemy import Column, BigInteger, TIMESTAMP
 from .base import Base
 
 class MemberInterest(Base):
