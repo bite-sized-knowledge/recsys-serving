@@ -54,7 +54,7 @@ jobs:
             export SSH_PORT="${{ secrets.SSH_PORT }}"
             export SSH_USER="${{ secrets.SSH_USER }}"
             export SSH_KEY="${{ secrets.SSH_KEY }}"
-            export DYNAMO_REGION="${{ secrets.DYNAMO_REGION }}"
+            export DYNAMODB_REGION="${{ secrets.DYNAMODB_REGION }}"
             export DYNAMODB_ENDPOINT_URL="${{ secrets.DYNAMODB_ENDPOINT_URL }}"
             echo ""
 
