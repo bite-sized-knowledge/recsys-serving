@@ -54,6 +54,8 @@ jobs:
             export SSH_PORT="${{ secrets.SSH_PORT }}"
             export SSH_USER="${{ secrets.SSH_USER }}"
             export SSH_KEY="${{ secrets.SSH_KEY }}"
+            export DYNAMO_REGION="${{ secrets.DYNAMO_REGION }}"
+            export DYNAMODB_ENDPOINT_URL="${{ secrets.DYNAMODB_ENDPOINT_URL }}"
             echo ""
 
             echo "4) 기존 FastAPI 서버 프로세스 종료"
