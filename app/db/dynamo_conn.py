@@ -10,7 +10,7 @@ def get_dynamo():
         region = os.getenv("DYNAMODB_REGION", "ap-northeast-2")
 
         boto3_params = {"region_name": region}
-        if endpoint_url:
+        if os.getenv('ENVIRONMENT') == 'dev':
             boto3_params.update({
                 "endpoint_url": endpoint_url,
             })
