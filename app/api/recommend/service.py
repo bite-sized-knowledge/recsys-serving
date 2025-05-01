@@ -36,7 +36,7 @@ def recommend_feeds(db: Session, dynamo: ServiceResource, member_id: int) -> Rec
         db.query(Recommendation.article_id)
         .join(Article, Recommendation.article_id == Article.article_id)
         .filter(Recommendation.member_id == member_id)
-        .filter(Recommendation.recommendation_id > last_seen_rec_id)
+        .filter(Recommendation.recommendation_id >= last_seen_rec_id)
         .order_by(Recommendation.recommendation_id.asc())
     )
     articles = [row[0] for row in q.limit(10).all()]
