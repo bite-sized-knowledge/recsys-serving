@@ -9,6 +9,9 @@ class Config(BaseSettings):
     DB_PASSWORD: str
     DB_NAME: str
 
+    DYNAMODB_REGION: str
+    DYNAMODB_ENDPOINT_URL: str
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
