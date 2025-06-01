@@ -3,7 +3,7 @@ from .schema import RecommendItem
 from .utils import get_last_seen_article_id
 from .fallback import fallback_recommend_exploration
 from boto3.resources.base import ServiceResource
-
+from datetime import datetime, timedelta
 from app.models.recommendation import Recommendation
 from app.models.article import Article
 
@@ -23,6 +23,7 @@ def recommend_feeds(db: Session, dynamo: ServiceResource, member_id: int) -> Rec
             db.query(Recommendation.recommendation_id)
             .filter(Recommendation.member_id == member_id)
             .filter(Recommendation.article_id == last_seen_article_id)
+            .order_by(Recommendation.recommendation_id.desc())
             .first()
         )
         last_seen_rec_id = rec_row.recommendation_id if rec_row else 0
@@ -32,11 +33,16 @@ def recommend_feeds(db: Session, dynamo: ServiceResource, member_id: int) -> Rec
         fallback_recommend_exploration(db, dynamo, member_id)
 
     # 2. 추천 pool에서 article_id 10개 추출 (커서 이후)
+    start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+
     q = (
         db.query(Recommendation.article_id)
         .join(Article, Recommendation.article_id == Article.article_id)
         .filter(Recommendation.member_id == member_id)
-        .filter(Recommendation.recommendation_id >= last_seen_rec_id)
+        .filter(Recommendation.recommendation_id > last_seen_rec_id)
+        .filter(Recommendation.created_at >= start_of_day)
+        .filter(Recommendation.created_at < end_of_day)
         .order_by(Recommendation.recommendation_id.asc())
     )
     articles = [row[0] for row in q.limit(10).all()]
