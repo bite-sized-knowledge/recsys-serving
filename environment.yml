@@ -16,3 +16,6 @@ dependencies:
       - pydantic-settings
       - boto3
       - cryptography
+      - langchain
+      - langchain-text-splitters
+      - qdrant-client
