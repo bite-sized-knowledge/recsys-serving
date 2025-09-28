@@ -12,6 +12,11 @@ class Config(BaseSettings):
     DYNAMODB_REGION: str
     DYNAMODB_ENDPOINT_URL: str
 
+    QDRANT_URL: str
+    QDRANT_API_KEY: str
+    QDRANT_COLLECTION_NAME: str
+    SEARCH_TOP_N: int
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from typing import List, Dict
 from qdrant_client import QdrantClient
-from embedder import TextEmbeddings
+from app.api.search.embedder import TextEmbeddings
 
 class QdrantSearcher:
     """
@@ -35,7 +35,7 @@ class QdrantSearcher:
             text=query, 
             dimensions=dimensions
         )
-        print("✅ 검색어 임베딩 완료")
+        print(f"Search Query : {query}, embedding done")
 
         # 2. Qdrant에 벡터 검색 실행
         search_result = self.client.search(
@@ -44,7 +44,7 @@ class QdrantSearcher:
             limit=limit,
             with_payload=True
         )
-        print("✅ Qdrant 벡터 검색 완료")
+        print("Qdrant Search Completed")
 
         # 3. 결과를 가공하여 반환
         processed_results = []
