@@ -24,7 +24,7 @@ class QdrantSearcher:
         self,
         query: str,
         collection_name: str = "bite-vectordb",
-        limit: int = 5,
+        limit: int = 999999,
         dimensions: int = 512 
     ) -> List[Dict]:
         """
