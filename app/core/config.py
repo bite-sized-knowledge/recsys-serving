@@ -15,7 +15,6 @@ class Config(BaseSettings):
     QDRANT_URL: str
     QDRANT_API_KEY: str
     QDRANT_COLLECTION_NAME: str
-    SEARCH_TOP_N: int
 
     class Config:
         env_file = ".env"
