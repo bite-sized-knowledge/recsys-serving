@@ -18,7 +18,7 @@ class QdrantSearcher:
 
         self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.embedder = TextEmbeddings()
-        print("✅ QdrantSearcher 초기화 완료. Qdrant 클라이언트 연결됨.")
+        print("QdrantSearcher 초기화 완료. Qdrant 클라이언트 연결됨.")
 
     async def search(
         self,
