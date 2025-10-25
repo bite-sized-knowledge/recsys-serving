@@ -57,7 +57,7 @@ jobs:
             export DYNAMODB_REGION="${{ secrets.DYNAMODB_REGION }}"
             export DYNAMODB_ENDPOINT_URL="${{ secrets.DYNAMODB_ENDPOINT_URL }}"
             export QDRANT_URL="${{ secrets.QDRANT_URL }}"
-            export QDRANT_API_KEY="${{ secrets.QDRAT_API_KEY }}"
+            export QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}"
             export QDRANT_COLLECTION_NAME="${{ secrets.QDRANT_COLLECTION_NAME }}"
             echo ""
 
