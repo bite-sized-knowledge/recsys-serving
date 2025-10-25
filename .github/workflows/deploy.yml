@@ -59,7 +59,6 @@ jobs:
             export QDRANT_URL="${{ secrets.QDRANT_URL }}"
             export QDRANT_API_KEY="${{ secrets.QDRAT_API_KEY }}"
             export QDRANT_COLLECTION_NAME="${{ secrets.QDRANT_COLLECTION_NAME }}"
-            export SEARCH_TOP_N="${{ secrets.SEARCH_TOP_N }}"
             echo ""
 
             echo "4) 기존 FastAPI 서버 프로세스 종료"
