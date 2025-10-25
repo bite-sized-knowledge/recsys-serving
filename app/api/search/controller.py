@@ -11,7 +11,6 @@ router = APIRouter()
 @router.get("", response_model=SearchResponse, tags=["search"], status_code=status.HTTP_200_OK)
 async def get_search_results(
     query: str,
-    points: int = config.SEARCH_TOP_N,
     searcher: QdrantSearcher = Depends(get_qdrant_searcher),
     collection_name: str = Depends(get_collection_name),
 ) -> SearchResponse:
@@ -19,8 +18,7 @@ async def get_search_results(
         article_ids = await search_articles(
             searcher=searcher,
             query=query,
-            collection_name=collection_name,
-            limit=points,
+            collection_name=collection_name
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -30,4 +28,4 @@ async def get_search_results(
             detail="검색 중 서버 오류가 발생했습니다.",
         ) from exc
 
-    return SearchResponse(article_ids=article_ids)
+    return SearchResponse(articles=article_ids)
