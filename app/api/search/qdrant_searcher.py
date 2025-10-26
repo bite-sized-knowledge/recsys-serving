@@ -1,6 +1,4 @@
-import os
-from dotenv import load_dotenv
-from typing import List, Dict
+from typing import Dict, List, Optional
 from qdrant_client import QdrantClient
 from app.api.search.embedder import TextEmbeddings
 
@@ -8,28 +6,54 @@ class QdrantSearcher:
     """
     Qdrant 벡터 DB에서 의미 기반 검색을 수행하는 클래스
     """
-    def __init__(self):
-        load_dotenv()
-        qdrant_url = os.getenv("QDRANT_URL")
-        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+    DEFAULT_RESULT_LIMIT = 100
 
-        if not qdrant_url or not qdrant_api_key:
-            raise ValueError("QDRANT_URL 또는 QDRANT_API_KEY가 .env 파일에 설정되지 않았습니다.")
+    def __init__(
+        self,
+        *,
+        url: str,
+        api_key: str,
+        collection_name: str,
+        client: Optional[QdrantClient] = None,
+        embedder: Optional[TextEmbeddings] = None,
+    ):
+        if not url:
+            raise ValueError("QDRANT_URL 환경 변수가 설정되지 않았습니다.")
+        if not api_key:
+            raise ValueError("QDRANT_API_KEY 환경 변수가 설정되지 않았습니다.")
+        if not collection_name:
+            raise ValueError("QDRANT_COLLECTION_NAME 환경 변수가 설정되지 않았습니다.")
 
-        self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        self.embedder = TextEmbeddings()
+        # 주입된 클라이언트나 임베더가 없으면 기본 인스턴스를 생성한다.
+        self.client = client or QdrantClient(url=url, api_key=api_key)
+        self.embedder = embedder or TextEmbeddings()
+        self.collection_name = collection_name
         print("QdrantSearcher 초기화 완료. Qdrant 클라이언트 연결됨.")
 
     async def search(
         self,
+        *,
         query: str,
-        collection_name: str = "bite-vectordb",
-        limit: int = 999999,
+        collection_name: Optional[str] = None,
+        limit: Optional[int] = None,
         dimensions: int = 512 
     ) -> List[Dict]:
         """
         주어진 텍스트 쿼리로 벡터 검색을 수행하고 결과를 반환
         """
+        if not query:
+            raise ValueError("검색어를 제공해야 합니다.")
+
+        resolved_collection = collection_name or self.collection_name
+        resolved_limit = (
+            self.DEFAULT_RESULT_LIMIT
+            if limit is None
+            else min(limit, self.DEFAULT_RESULT_LIMIT)
+        )
+
+        if resolved_limit <= 0:
+            raise ValueError("limit 파라미터는 1 이상의 정수여야 합니다.")
+
         # 1. 검색어를 임베딩 벡터로 변환
         query_vector = await self.embedder.embed_text(
             text=query, 
@@ -39,9 +63,9 @@ class QdrantSearcher:
 
         # 2. Qdrant에 벡터 검색 실행
         search_result = self.client.search(
-            collection_name=collection_name,
+            collection_name=resolved_collection,
             query_vector=query_vector,
-            limit=limit,
+            limit=resolved_limit,
             with_payload=True
         )
         print("Qdrant Search Completed")
