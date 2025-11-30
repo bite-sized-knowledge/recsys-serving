@@ -24,8 +24,11 @@ class QdrantSearcher:
         if not collection_name:
             raise ValueError("QDRANT_COLLECTION_NAME 환경 변수가 설정되지 않았습니다.")
 
-        # 주입된 클라이언트나 임베더가 없으면 기본 인스턴스를 생성한다.
-        self.client = client or QdrantClient(url=url, api_key=api_key)
+        self.client = client or QdrantClient(
+            url=url,
+            api_key=api_key,
+            check_compatibility=False,
+        )
         self.embedder = embedder or TextEmbeddings()
         self.collection_name = collection_name
         print("QdrantSearcher 초기화 완료. Qdrant 클라이언트 연결됨.")
@@ -62,11 +65,10 @@ class QdrantSearcher:
         print(f"Search Query : {query}, embedding done")
 
         # 2. Qdrant에 벡터 검색 실행
-        search_result = self.client.search(
+        search_result = self._execute_query(
             collection_name=resolved_collection,
             query_vector=query_vector,
             limit=resolved_limit,
-            with_payload=True
         )
         print("Qdrant Search Completed")
 
@@ -91,3 +93,23 @@ class QdrantSearcher:
         except Exception as e:
             print(f"컬렉션 개수를 가져오는 중 오류 발생: {e}")
             return None
+
+    def _execute_query(self, *, collection_name: str, query_vector: List[float], limit: int):
+        query_kwargs = dict(
+            collection_name=collection_name,
+            limit=limit,
+            with_payload=True,
+        )
+
+        if hasattr(self.client, "query_points"):
+            response = self.client.query_points(
+                query=query_vector,
+                **query_kwargs,
+            )
+            return response.points if hasattr(response, "points") else response
+
+        # 구 버전 클라이언트 호환
+        return self.client.search(
+            query_vector=query_vector,
+            **query_kwargs,
+        )
