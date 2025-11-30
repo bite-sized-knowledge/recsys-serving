@@ -27,11 +27,13 @@ async def get_search_results(
             limit=limit,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc)) from exc
     except Exception as exc:  
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="검색 중 서버 오류가 발생했습니다.",
+            detail=f"검색 중 서버 오류가 발생했습니다. : {exc}",
         ) from exc
 
     return SearchResponse(articles=article_ids)
