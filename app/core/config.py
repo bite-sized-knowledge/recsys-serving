@@ -2,19 +2,16 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 class Config(BaseSettings):
-    ENVIRONMENT: str
-    DB_HOST: str
-    DB_PORT: int
-    DB_USER: str
-    DB_PASSWORD: str
-    DB_NAME: str
+    ENVIRONMENT: str = "prod"
+    DB_HOST: str = "127.0.0.1"
+    DB_PORT: int = 3306
+    DB_USER: str = "bite-dev"
+    DB_PASSWORD: str = "qkdlqm!"
+    DB_NAME: str = "bite"
 
-    DYNAMODB_REGION: str
-    DYNAMODB_ENDPOINT_URL: str
-
-    QDRANT_URL: str
-    QDRANT_API_KEY: str
-    QDRANT_COLLECTION_NAME: str
+    QDRANT_URL: str = "http://127.0.0.1:6333"
+    QDRANT_API_KEY: str = ""
+    QDRANT_COLLECTION_NAME: str = "bite-vectordb"
 
     class Config:
         env_file = ".env"

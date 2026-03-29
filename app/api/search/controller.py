@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from app.api.search.dependencies import get_collection_name, get_qdrant_searcher
-from app.api.search.qdrant_searcher import QdrantSearcher
+from sqlalchemy.orm.session import Session
+
+from app.db import get_db
 from app.api.search.schema import SearchResponse
 from app.api.search.service import search_articles
 
@@ -11,19 +12,17 @@ router = APIRouter()
 async def get_search_results(
     query: str,
     limit: int = Query(
-        QdrantSearcher.DEFAULT_RESULT_LIMIT,
+        20,
         ge=1,
-        le=QdrantSearcher.DEFAULT_RESULT_LIMIT,
-        description="검색 결과 상한 (최대 100, 기본 100)",
+        le=100,
+        description="검색 결과 상한 (최대 100, 기본 20)",
     ),
-    searcher: QdrantSearcher = Depends(get_qdrant_searcher),
-    collection_name: str = Depends(get_collection_name),
+    db: Session = Depends(get_db),
 ) -> SearchResponse:
     try:
         article_ids = await search_articles(
-            searcher=searcher,
+            db=db,
             query=query,
-            collection_name=collection_name,
             limit=limit,
         )
     except ValueError as exc:
