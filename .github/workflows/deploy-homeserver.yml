@@ -27,7 +27,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           source: "."
-          target: "${{ secrets.DEPLOY_PATH }}/recsys-serving"
+          target: "~/recsys-serving"
 
       - name: Restart recsys-api on home server
         uses: appleboy/ssh-action@v1.2.0
@@ -38,7 +38,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             set -e
-            cd "${{ secrets.DEPLOY_PATH }}/infra"
+            cd ~/infra
             docker-compose build recsys-api
             docker-compose up -d recsys-api
             ATTEMPTS=15
