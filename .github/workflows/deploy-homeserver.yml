@@ -1,0 +1,53 @@
+name: Deploy Recsys API to Home Server
+
+on:
+  push:
+    branches: ["prod"]
+    paths:
+      - 'app/**'
+      - 'server.py'
+      - 'Dockerfile'
+      - 'environment.yml'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Upload recsys-serving source
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "."
+          target: "${{ secrets.DEPLOY_PATH }}/recsys-serving"
+
+      - name: Restart recsys-api on home server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}/infra"
+            docker-compose build recsys-api
+            docker-compose up -d recsys-api
+            ATTEMPTS=15
+            for i in $(seq 1 $ATTEMPTS); do
+              STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/health || true)
+              if [ "$STATUS_CODE" = "200" ]; then
+                exit 0
+              fi
+              sleep 4
+            done
+            echo "health check failed"
+            exit 1
