@@ -46,7 +46,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           source: "."
-          target: "~/recsys-serving"
+          target: "~/projects/recsys-serving"
 
       - name: Restart recsys-api on home server
         if: steps.deploy_guard.outputs.enabled == 'true'
@@ -58,9 +58,9 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             set -e
-            cd ~/infra
-            docker-compose build recsys-api
-            docker-compose up -d recsys-api
+            cd ~/projects/infra
+            docker compose build recsys-api
+            docker compose up -d recsys-api
             ATTEMPTS=15
             for i in $(seq 1 $ATTEMPTS); do
               STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/health || true)
