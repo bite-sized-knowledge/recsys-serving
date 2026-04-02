@@ -1,19 +1,16 @@
 name: Deploy Recsys API to Home Server
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Recsys Serving CI"]
     branches: ["prod"]
-    paths:
-      - 'app/**'
-      - 'server.py'
-      - 'Dockerfile'
-      - 'environment.yml'
-      - '.github/workflows/**'
+    types: [completed]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Check deploy connectivity
@@ -28,11 +25,7 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if timeout 5 bash -lc "</dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Deploy recsys-api on home server
         if: steps.deploy_guard.outputs.enabled == 'true'
@@ -44,10 +37,8 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             set -e
-            cd ~/projects/recsys-serving
-            git pull origin prod
             cd ~/projects/infra
-            docker compose build recsys-api
+            docker compose pull recsys-api
             docker compose up -d recsys-api
             ATTEMPTS=15
             for i in $(seq 1 $ATTEMPTS); do
