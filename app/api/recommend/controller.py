@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm.session import Session
 from app.db import get_db
+from app.core.auth import verify_api_key
 from .schema import RecommendItem
 from .service import recommend_feeds
 
@@ -11,5 +12,6 @@ router = APIRouter()
 async def get_recommend_feeds(
     member_id: int,
     db: Session = Depends(get_db),
+    _api_key: str = Depends(verify_api_key),
 ):
     return recommend_feeds(db, member_id)

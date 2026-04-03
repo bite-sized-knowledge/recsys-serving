@@ -6,8 +6,10 @@ class Config(BaseSettings):
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306
     DB_USER: str = "bite-dev"
-    DB_PASSWORD: str = "qkdlqm!"
+    DB_PASSWORD: str
     DB_NAME: str = "bite"
+
+    RECSYS_API_KEY: str = ""
 
     QDRANT_URL: str = "http://127.0.0.1:6333"
     QDRANT_API_KEY: str = ""

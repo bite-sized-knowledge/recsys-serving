@@ -14,6 +14,9 @@ async def search_articles(
     if not query:
         raise ValueError("검색어를 제공해야 합니다.")
 
+    if len(query) > 200:
+        raise ValueError("검색어는 200자 이하여야 합니다.")
+
     normalized = query.strip()
     results = (
         db.query(Article.article_id)
