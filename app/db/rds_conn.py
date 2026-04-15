@@ -1,3 +1,4 @@
+import os
 import ssl
 
 from sqlalchemy import create_engine
@@ -14,9 +15,14 @@ def get_engine():
             f"mysql+pymysql://{config.DB_USER}:{config.DB_PASSWORD}"
             f"@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
         )
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
+        ca_path = os.getenv("DB_TLS_CA")
+        if ca_path:
+            ssl_ctx = ssl.create_default_context(cafile=ca_path)
+            ssl_ctx.check_hostname = False  # self-signed CN doesn't match Docker service name
+        else:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
         engine = create_engine(
             DATABASE_URL,
             pool_size=10,
