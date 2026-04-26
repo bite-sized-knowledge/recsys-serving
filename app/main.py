@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.db.rds_conn import engine
 from app.api import api
+from app.middleware.request_logger import install as install_request_logger
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,4 +15,5 @@ async def lifespan(app: FastAPI):
     engine.dispose()
 
 app = FastAPI(lifespan=lifespan)
+install_request_logger(app)
 app.include_router(api)
