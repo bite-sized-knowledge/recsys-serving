@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI):
     # 모델/외부 인덱스 초기화는 import 시점이 아니라 lifespan에서 처리한다.
     # 검색 의존 모듈 import도 startup 시점으로 미뤄 ONNX 파일이 없는
     # 환경(테스트, 마이그레이션 등)에서 모듈 로드가 깨지지 않게 한다.
+    from app.core.config import config as _cfg
     from app.services.embedder import QueryEncoder
     from app.services.qdrant_client import ensure_payload_indexes
 
@@ -25,6 +26,30 @@ async def lifespan(app: FastAPI):
     encoder = QueryEncoder.instance()
     encoder.warmup()
     log.info("Query encoder ready.")
+
+    if _cfg.RERANKER_ENABLED:
+        try:
+            from app.services.reranker import Reranker
+            log.info("Loading cross-encoder reranker...")
+            reranker = Reranker.instance()
+            reranker.warmup()
+            log.info("Reranker ready.")
+        except FileNotFoundError as exc:
+            log.warning("Reranker model not found, hybrid_rerank mode will fall back: %s", exc)
+        except Exception as exc:
+            log.warning("Reranker init failed, hybrid_rerank mode will fall back: %s", exc)
+
+    if _cfg.QU_ENABLED:
+        try:
+            from app.services.query_understanding import QueryUnderstander
+            log.info("Loading query understanding LLM...")
+            qu = QueryUnderstander.instance()
+            qu.warmup()
+            log.info("Query understanding ready.")
+        except FileNotFoundError as exc:
+            log.warning("QU model not found, /search/understand will 503: %s", exc)
+        except Exception as exc:
+            log.warning("QU init failed, /search/understand will 503: %s", exc)
 
     try:
         ensure_payload_indexes()

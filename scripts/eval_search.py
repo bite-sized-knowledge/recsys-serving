@@ -69,17 +69,17 @@ async def _evaluate_mode(
                 db=db,
                 query=title,
                 filters=SearchFilters(),
-                limit=k,
+                max_pool=max(k, 50),
                 mode=mode,
             )
         except Exception as exc:
             print(f"  ! {mode.value} 실패 ({article_id}): {exc}")
             continue
         latencies.append((time.perf_counter() - start) * 1000)
-
-        if article_id in results:
+        results_top_k = results[:k]
+        if article_id in results_top_k:
             hits += 1
-            rank = results.index(article_id) + 1
+            rank = results_top_k.index(article_id) + 1
             rr_sum += 1.0 / rank
 
     n = max(len(samples), 1)
@@ -108,7 +108,12 @@ async def main_async(samples_n: int, k: int) -> int:
             return 1
         print(f"샘플 {len(samples)}개로 평가 시작 (top-K={k})\n")
 
-        modes = [SearchMode.FULLTEXT, SearchMode.DENSE, SearchMode.HYBRID]
+        modes = [
+            SearchMode.FULLTEXT,
+            SearchMode.DENSE,
+            SearchMode.HYBRID,
+            SearchMode.HYBRID_RERANK,
+        ]
         results: dict[str, ModeResult] = {}
         for mode in modes:
             print(f"== {mode.value} ==")

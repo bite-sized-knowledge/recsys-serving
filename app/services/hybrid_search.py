@@ -7,7 +7,7 @@ import logging
 from enum import Enum
 from typing import Iterable, Optional
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.config import config
@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 class SearchMode(str, Enum):
     HYBRID = "hybrid"
+    HYBRID_RERANK = "hybrid_rerank"
     DENSE = "dense"
     FULLTEXT = "fulltext"
 
@@ -39,6 +40,36 @@ _BM25_SQL = text(
     LIMIT :limit
     """
 )
+
+
+_PASSAGE_SQL = text(
+    """
+    SELECT article_id,
+           CONCAT_WS(
+               '. ',
+               NULLIF(SUBSTRING(title, 1, :title_len), ''),
+               NULLIF(SUBSTRING(description, 1, :desc_len), ''),
+               NULLIF(SUBSTRING(keywords, 1, :kw_len), '')
+           ) AS passage
+    FROM article
+    WHERE article_id IN :ids
+    """
+)
+
+
+def _fetch_passages(db: Session, ids: list[str]) -> dict[str, str]:
+    if not ids:
+        return {}
+    rows = db.execute(
+        _PASSAGE_SQL.bindparams(bindparam("ids", expanding=True)),
+        {
+            "ids": ids,
+            "title_len": config.RERANKER_PASSAGE_TITLE_CHARS,
+            "desc_len": config.RERANKER_PASSAGE_DESC_CHARS,
+            "kw_len": config.RERANKER_PASSAGE_KEYWORDS_CHARS,
+        },
+    ).all()
+    return {str(r[0]): (r[1] or "") for r in rows}
 
 
 def _sanitize_phrase(query: str) -> str:
@@ -99,25 +130,28 @@ async def hybrid_search(
     db: Session,
     query: str,
     filters: SearchFilters,
-    limit: int,
-    offset: int = 0,
+    max_pool: int = 100,
     mode: SearchMode = SearchMode.HYBRID,
 ) -> list[str]:
+    """Returns the full fused ranking (up to max_pool). Caller is responsible
+    for slicing into pages — keeping pagination decisions out of this layer
+    enables stateless snapshot cursors at the service boundary.
+    """
     if not query or not query.strip():
         return []
 
-    bm25_top_n = config.SEARCH_BM25_TOP_N
-    dense_top_n = config.SEARCH_DENSE_TOP_N
+    bm25_top_n = max(config.SEARCH_BM25_TOP_N, max_pool)
+    dense_top_n = max(config.SEARCH_DENSE_TOP_N, max_pool)
 
     bm25_ids: list[str] = []
     dense_ids: list[str] = []
 
-    if mode in (SearchMode.HYBRID, SearchMode.FULLTEXT):
+    if mode in (SearchMode.HYBRID, SearchMode.HYBRID_RERANK, SearchMode.FULLTEXT):
         bm25_task = asyncio.to_thread(_bm25_query, db, query, filters, bm25_top_n)
     else:
         bm25_task = None
 
-    if mode in (SearchMode.HYBRID, SearchMode.DENSE):
+    if mode in (SearchMode.HYBRID, SearchMode.HYBRID_RERANK, SearchMode.DENSE):
         vector = await _encode_query(query)
         dense_task = asyncio.to_thread(dense_search, vector, filters, dense_top_n)
     else:
@@ -139,4 +173,47 @@ async def hybrid_search(
     else:
         fused = rrf_fuse(bm25_ids, dense_ids, k=config.SEARCH_RRF_K)
 
-    return fused[offset : offset + limit]
+    fused = fused[:max_pool]
+
+    if mode is SearchMode.HYBRID_RERANK and config.RERANKER_ENABLED and fused:
+        fused = await _apply_rerank(db, query, fused)
+
+    return fused
+
+
+async def _apply_rerank(db: Session, query: str, fused: list[str]) -> list[str]:
+    """fused 상위 RERANKER_TOP_N개를 cross-encoder로 정밀 재정렬한다.
+    나머지(top_n 밖)는 원래 순서대로 뒤에 붙여 안정적인 페이지네이션을 보장.
+    """
+    from app.services.reranker import Reranker
+
+    top_n = min(config.RERANKER_TOP_N, len(fused))
+    head_ids = fused[:top_n]
+    tail_ids = fused[top_n:]
+
+    passages = await asyncio.to_thread(_fetch_passages, db, head_ids)
+    candidates = [(aid, passages.get(aid, "")) for aid in head_ids]
+
+    def _score():
+        reranker = Reranker.instance()
+        pairs = [(query, p) for _, p in candidates]
+        scores = reranker.score(pairs)
+        ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
+        return [c[0] for c, _ in ranked]
+
+    try:
+        new_head = await asyncio.wait_for(
+            asyncio.to_thread(_score),
+            timeout=config.RERANKER_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "Reranker timed out after %.1fs, returning original RRF order",
+            config.RERANKER_TIMEOUT_SEC,
+        )
+        return fused
+    except Exception as exc:
+        log.warning("Reranker failed, returning original RRF order: %s", exc)
+        return fused
+
+    return new_head + tail_ids
