@@ -183,6 +183,5 @@ copy_dynamo.py
 models/qwen3-embed-onnx/
 models/qwen3-embed-onnx-int8/
 models/bge-reranker-base-onnx/
-models/qwen2.5-0.5b-instruct-gguf/
 
 # End of https://www.toptal.com/developers/gitignore/api/python

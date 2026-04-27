@@ -9,7 +9,6 @@ dependencies = [
     "fastapi>=0.136.1",
     "langchain>=1.2.15",
     "langchain-text-splitters>=1.1.2",
-    "llama-cpp-python>=0.3.20",
     "numpy>=2.4.4",
     "onnxruntime>=1.25.0",
     "pandas>=3.0.2",

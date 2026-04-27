@@ -25,34 +25,30 @@ class Config(BaseSettings):
     EMBEDDING_MAX_LEN: int = 512
 
     RERANKER_MODEL_DIR: str = str(PROJECT_ROOT / "models" / "bge-reranker-base-onnx")
-    # 기본 fp32. CrossEncoder ranking과 정확히 일치 (int8은 미세한 ordering 흔들림).
-    # 디스크 절감을 위해 RERANKER_MODEL_FILENAME=model_int8.onnx로 override 가능.
     RERANKER_MODEL_FILENAME: str = "model.onnx"
-    # max_len 128 + 짧은 passage = attention O(N²) 부담 ↓.
-    # 1500자 passage(token~500) → 11s, 240자 passage(token~100) → 2.5s,
-    # 목표: 100자 passage(token~40) → ~500ms.
-    RERANKER_MAX_LEN: int = 128
-    RERANKER_TOP_N: int = 20
-    RERANKER_BATCH_SIZE: int = 16
+    # token 길이가 latency를 지배(attention O(N²)). max_len 96 + passage char 축소
+    # = 30 pair · 100자 passage(token~40) ≈ 200~300ms 목표. timeout으로 cap.
+    RERANKER_MAX_LEN: int = 96
+    RERANKER_TOP_N: int = 15
+    RERANKER_BATCH_SIZE: int = 32
     RERANKER_ENABLED: bool = True
-    RERANKER_TIMEOUT_SEC: float = 1.5
-    RERANKER_PASSAGE_TITLE_CHARS: int = 80
-    RERANKER_PASSAGE_DESC_CHARS: int = 120
-    RERANKER_PASSAGE_KEYWORDS_CHARS: int = 50
-
-    QU_ENABLED: bool = True
-    QU_MODEL_PATH: str = str(
-        PROJECT_ROOT / "models" / "qwen2.5-0.5b-instruct-gguf" / "qwen2.5-0.5b-instruct-q4_0.gguf"
-    )
-    QU_N_CTX: int = 2048
-    QU_N_THREADS: int = 4
-    QU_MAX_TOKENS: int = 200
+    RERANKER_TIMEOUT_SEC: float = 1.0
+    RERANKER_PASSAGE_TITLE_CHARS: int = 60
+    RERANKER_PASSAGE_DESC_CHARS: int = 80
+    RERANKER_PASSAGE_KEYWORDS_CHARS: int = 40
 
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
     REDIS_ENABLED: bool = True
     REDIS_CACHE_NAMESPACE: str = "search:emb:"
     REDIS_POPULAR_KEY: str = "search:popular"
     REDIS_POPULAR_TTL: int = 60 * 60 * 24 * 30  # 30 days
+
+    # Drift monitoring — 색인 측 SentenceTransformer ↔ 쿼리 측 ONNX parity check
+    DRIFT_ENABLED: bool = True
+    DRIFT_REFERENCE_MODEL_ID: str = "Qwen/Qwen3-Embedding-0.6B"
+    DRIFT_INTERVAL_SEC: int = 24 * 60 * 60  # 24h
+    DRIFT_INITIAL_DELAY_SEC: int = 5 * 60  # 5min after startup
+    DRIFT_COS_THRESHOLD: float = 0.99
 
     SEARCH_CACHE_SIZE: int = 10000
     SEARCH_CACHE_TTL: int = 3600
