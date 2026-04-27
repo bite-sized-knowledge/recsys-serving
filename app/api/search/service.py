@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import uuid
 import zlib
 from typing import List, Optional, Tuple
 
@@ -29,8 +30,12 @@ def _query_hash(query: str) -> str:
     return hashlib.sha1(query.strip().encode("utf-8")).hexdigest()[:12]
 
 
-def _encode_cursor(snapshot: list[str], offset: int, query_hash: str) -> str:
-    payload = {"f": snapshot, "o": offset, "q": query_hash}
+def _new_query_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _encode_cursor(snapshot: list[str], offset: int, query_hash: str, query_id: str) -> str:
+    payload = {"f": snapshot, "o": offset, "q": query_hash, "i": query_id}
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     compressed = zlib.compress(raw, level=9)
     return base64.urlsafe_b64encode(compressed).decode("ascii")
@@ -61,7 +66,13 @@ async def search_articles(
     published_after: Optional[float] = None,
     published_before: Optional[float] = None,
     mode: SearchMode = SearchMode.HYBRID,
-) -> Tuple[List[str], Optional[str]]:
+) -> Tuple[List[str], Optional[str], str]:
+    """Returns (article_ids, next_cursor, query_id).
+
+    query_id는 같은 query로 시작된 검색 세션 전체에서 동일(snapshot cursor 안에 echo).
+    클라이언트가 후속 노출/클릭 이벤트에 첨부하면 (query_id, clicked_position) 단위
+    분석이 가능하다.
+    """
     if not query or not query.strip():
         raise ValueError("검색어를 제공해야 합니다.")
     if len(query) > MAX_QUERY_LEN:
@@ -74,9 +85,10 @@ async def search_articles(
     snapshot: list[str] = list(payload.get("f") or [])
     offset = int(payload.get("o", 0) or 0)
     cached_hash = payload.get("q", "")
+    cached_query_id = payload.get("i") or ""
 
     # Snapshot이 stale(다른 query) 또는 부재면 fresh hybrid 호출.
-    if not snapshot or cached_hash != fresh_hash:
+    if not snapshot or cached_hash != fresh_hash or not cached_query_id:
         filters = SearchFilters(
             category_id=category_id,
             lang=lang,
@@ -92,6 +104,7 @@ async def search_articles(
             mode=mode,
         )
         offset = 0
+        cached_query_id = _new_query_id()
         # 인기 검색어 카운트는 fresh fetch 시점에만 (cursor follow-up은 같은 검색)
         if snapshot:
             popular_queries.record(normalized_q)
@@ -101,6 +114,6 @@ async def search_articles(
     next_offset = offset + limit
     next_cursor: Optional[str] = None
     if next_offset < len(snapshot):
-        next_cursor = _encode_cursor(snapshot, next_offset, fresh_hash)
+        next_cursor = _encode_cursor(snapshot, next_offset, fresh_hash, cached_query_id)
 
-    return page, next_cursor
+    return page, next_cursor, cached_query_id

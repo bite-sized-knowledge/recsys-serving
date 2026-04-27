@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class SearchResponse(BaseModel):
     articles: List[str]
     next: Optional[str] = None
+    query_id: str
 
 
 class UnderstandRequest(BaseModel):
