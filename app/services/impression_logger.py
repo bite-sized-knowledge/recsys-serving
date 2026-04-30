@@ -54,5 +54,5 @@ def log_impressions(
         try:
             db.rollback()
         except Exception:
-            pass
+            log.debug("impression log rollback skipped", exc_info=True)
         return 0

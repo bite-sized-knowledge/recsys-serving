@@ -17,9 +17,6 @@ from .schema import FeedbackAck, FeedbackEvent
 
 log = logging.getLogger(__name__)
 
-# Phase 2 user_vector 갱신 트리거 이벤트 (negative 는 vector 안 섞음)
-POSITIVE_EVENTS = {"article_in", "like", "archive", "share"}
-
 
 def _resolve_category(db: Session, article_id: str) -> int | None:
     row = db.execute(
@@ -46,9 +43,9 @@ def handle_feedback(db: Session, ev: FeedbackEvent) -> FeedbackAck:
     except Exception as exc:
         log.warning("bandit apply_reward failed: %s", exc)
 
-    # 2. Phase 2 user_profile EMA push (positive 이벤트만)
+    # 2. Phase 2 user_profile EMA push (positive reward 이벤트만 — bandit α 신호와 동일 set)
     user_vector_updated = False
-    if et in POSITIVE_EVENTS:
+    if et in bandit.REWARD_ALPHA:
         try:
             user_vector_updated = push_event_to_profile(ev.member_id, ev.article_id)
         except Exception as exc:

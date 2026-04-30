@@ -7,8 +7,9 @@ Lazy init: 첫 호출 시 member_interest 기반 prior 채워 INSERT.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from sqlalchemy import text
@@ -50,11 +51,23 @@ def _fetch_member_interests(db: Session, member_id: int) -> List[int]:
     return [int(r[0]) for r in rows]
 
 
+# 글로벌 풀은 매일 1회 swap. 카테고리 set 만 알면 되므로 process-level TTL 캐시.
+_POOL_CAT_TTL_SEC = 300
+_pool_cat_cache: Tuple[float, List[int]] = (0.0, [])
+
+
 def _fetch_pool_categories(db: Session) -> List[int]:
+    global _pool_cat_cache
+    now = time.time()
+    cached_at, cached = _pool_cat_cache
+    if cached and (now - cached_at) < _POOL_CAT_TTL_SEC:
+        return cached
     rows = db.execute(
         text("SELECT DISTINCT category_id FROM recommendation_global WHERE category_id IS NOT NULL")
     ).all()
-    return [int(r[0]) for r in rows]
+    fresh = [int(r[0]) for r in rows]
+    _pool_cat_cache = (now, fresh)
+    return fresh
 
 
 def _fetch_existing_state(db: Session, member_id: int) -> Dict[int, BanditRow]:

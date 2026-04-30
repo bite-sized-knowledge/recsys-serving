@@ -11,13 +11,17 @@ from typing import Optional
 
 import numpy as np
 
+from app.core.config import config
 from app.services.qdrant_client import get_client
 
 log = logging.getLogger(__name__)
 
 USER_PROFILE_COLLECTION = "user_profile"
-ITEM_COLLECTION = "bite-vectordb"  # article 임베딩 origin
-EMA_DECAY = 0.9  # incremental EMA: new = decay * old + (1 - decay) * article_vec
+# 실시간 incremental EMA: new = decay * old + (1 - decay) * article_vec.
+# Note: recommender 배치 측 (data/pipeline/user_vector.py) 는 시간 가중 EMA (weight = decay^days)
+# — 의미가 다르므로 값(0.9 vs 0.95)도 다름. 둘이 같은 collection (`user_profile`) 을 채우되
+# 배치가 ground-truth 로 매일 overwrite, 실시간은 그 사이 incremental.
+EMA_DECAY = 0.9
 UUID_NAMESPACE = uuid.NAMESPACE_DNS
 
 
@@ -67,7 +71,7 @@ def push_event_to_profile(member_id: int, article_id: str) -> bool:
     aid = _to_article_point_id(article_id)
     try:
         art_points = client.retrieve(
-            collection_name=ITEM_COLLECTION,
+            collection_name=config.QDRANT_COLLECTION_NAME,
             ids=[aid],
             with_vectors=True,
             with_payload=False,
