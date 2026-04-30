@@ -8,6 +8,31 @@
 - **Optional cross-encoder rerank**: BAAI/bge-reranker-base (default OFF, opt-in via mode=`hybrid_rerank`)
 - **Stateless cursor**: zlib + base64로 snapshot/offset/query_hash 인코딩. `query_id`도 cursor 안에 echo (`i` 필드).
 - **Query Understanding**: 순수 regex sanitize (`app/services/query_understanding.py:analyze`). LLM 제거됨. API contract는 `POST /search/understand` 그대로 유지.
+- **추천 서빙 (Phase 1+2)**: 카테고리 단위 Beta-Bernoulli Thompson Sampling + 글로벌 풀 quota fill + Phase 2 user_profile within-category rerank. 상태 (recommendation_global, member_category_bandit, Qdrant user_profile) 는 `recommender` 배치가 채움. 응답 contract `{"articles":[...]}` 유지.
+
+## 추천 흐름 (`/feeds` GET)
+
+1. `bandit.load_or_init` — 풀 카테고리 set 에 대해 (member_id, category_id) state 보장. 없으면 `member_interest` 기반 prior `Beta(4,1)` (선택), `Beta(1,2)` (미선택) 채워 INSERT.
+2. `bandit.sample_thetas` — Beta(α,β) sample.
+3. `bandit.allocate_quota` — softmax(theta) × 10, top-K=6 카테고리 quota 분배.
+4. `recommendation_global` 에서 카테고리별 후보 풀 `quota * 4` 가져옴 (`rank_global ASC`).
+5. **Phase 2**: `user_vector_lookup.get_user_vector(member_id)` 있으면 within-category cosine rerank (가중 0.7 글로벌 + 0.3 유사도). 없으면 글로벌 score 그대로.
+6. dedup, quota 부족시 글로벌 풀 backfill, in-response shuffle.
+7. `impression_logger.log_impressions` — `recommendation_impression` 동기 INSERT (10 row, latency 무시 가능).
+
+## Feedback (`/feeds/feedback` POST)
+
+- bite-api 가 `user_events` insert 후 fire-and-forget 으로 호출 (실패 silent).
+- `bandit.apply_reward`: incremental UPDATE α/β. 이벤트 가중치는 `services/bandit.py` 상수.
+- Phase 2 positive event (`article_in/like/archive/share`) 는 `user_vector_lookup.push_event_to_profile` 로 user_profile EMA push (decay=0.9, 첫 클릭이면 article_vec 그대로 init).
+- 배치 reconcile 이 매일 ground-truth 로 정정 — 실시간 race 무시.
+
+## ⚠️ 추천 함정
+
+- **`recommendation_global` 비어있으면** 빈 응답. recommender 배치가 한 번도 안 돌면 이 상태.
+- **응답 contract `{"articles":[...]}`** 변경 금지. bite-api 호출자에 영향. Phase 2 rerank 도입해도 contract 그대로.
+- **Qdrant `user_profile` collection** 은 recommender 배치가 만든다 (없으면 Phase 2 코드는 graceful skip 하고 글로벌 score fallback). 차원 1024.
+- **bandit incremental ↔ batch ground-truth race**: 둘 다 같은 row UPSERT. 실시간 update 가 잠깐 sweep 될 수 있지만 다음 reconcile (매일) 이 ground-truth 로 덮어씀 — 의도된 동작.
 
 ## ⚠️ 실제로 겪은 함정 (반복 금지)
 
