@@ -42,6 +42,10 @@ class Config(BaseSettings):
     REDIS_CACHE_NAMESPACE: str = "search:emb:"
     REDIS_POPULAR_KEY: str = "search:popular"
     REDIS_POPULAR_TTL: int = 60 * 60 * 24 * 30  # 30 days
+    # Popular-query auto-suggest. Off by default — single-occurrence noise
+    # ranks the same as legitimate trending queries with no cutoff or
+    # moderation. Re-enable only with curation in place.
+    SEARCH_POPULAR_ENABLED: bool = False
 
     # Drift monitoring — 색인 측 SentenceTransformer ↔ 쿼리 측 ONNX parity check
     DRIFT_ENABLED: bool = True
