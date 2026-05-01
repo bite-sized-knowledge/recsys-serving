@@ -208,8 +208,12 @@ def _serve(
     member_id: Optional[int],
     device_id: Optional[str],
     lang: Optional[str],
+    interest_ids: Optional[List[int]] = None,
 ) -> RecommendItem:
-    """회원/비회원 공통 서빙 흐름. anonymous 는 bandit 만 device 테이블."""
+    """회원/비회원 공통 서빙 흐름. anonymous 는 bandit 만 device 테이블.
+
+    interest_ids 는 비회원 lazy init 시 prior 강화에만 사용 (회원은 member_interest 가 ground truth).
+    """
     started = time.perf_counter()
     is_anonymous = member_id is None
     rng = np.random.default_rng()
@@ -221,7 +225,7 @@ def _serve(
 
     # 1. bandit state
     if is_anonymous:
-        state = bandit.load_or_init_device(db, device_id)  # type: ignore[arg-type]
+        state = bandit.load_or_init_device(db, device_id, interest_ids=interest_ids)  # type: ignore[arg-type]
     else:
         state = bandit.load_or_init(db, int(member_id))
     if not state:
@@ -302,5 +306,12 @@ def recommend_feeds_anonymous(
     db: Session,
     device_id: str,
     lang: Optional[str] = None,
+    interest_ids: Optional[List[int]] = None,
 ) -> RecommendItem:
-    return _serve(db, member_id=None, device_id=str(device_id), lang=lang)
+    return _serve(
+        db,
+        member_id=None,
+        device_id=str(device_id),
+        lang=lang,
+        interest_ids=interest_ids,
+    )

@@ -38,9 +38,15 @@ REWARD_BETA: Dict[str, float] = {
 # softmax temperature — 높을수록 quota 가 평탄해져 winner-take-all 완화 (serendipity ↑).
 QUOTA_TEMPERATURE = 1.5
 
-# 비회원 prior — onboarding 정보 없으니 균등.
+# 비회원 prior — interest_ids 미제공 시 균등.
 DEVICE_PRIOR_ALPHA = 1.0
 DEVICE_PRIOR_BETA = 1.0
+# X-Interest-Ids 헤더로 들어온 카테고리: 회원 onboarding 보다 약간 약한 prior
+# (회원: Beta(4,1) — 명시 가입 + 동의 / 비회원: Beta(2,1) — UI 클릭 한번이라 신뢰 약함).
+DEVICE_PRIOR_ALPHA_INTEREST = 2.0
+DEVICE_PRIOR_BETA_INTEREST = 1.0
+DEVICE_PRIOR_ALPHA_NON_INTEREST = 1.0
+DEVICE_PRIOR_BETA_NON_INTEREST = 2.0
 
 
 @dataclass
@@ -200,13 +206,28 @@ def _fetch_existing_device_state(db: Session, device_id: str) -> Dict[int, Devic
     }
 
 
-def _lazy_init_device(db: Session, device_id: str, categories: Iterable[int]) -> Dict[int, DeviceBanditRow]:
-    """device_category_bandit 에 prior(균등 Beta(1,1))로 row 채워넣고 반환."""
+def _lazy_init_device(
+    db: Session,
+    device_id: str,
+    categories: Iterable[int],
+    interest_ids: Optional[Iterable[int]] = None,
+) -> Dict[int, DeviceBanditRow]:
+    """device_category_bandit 에 prior 로 row 채워넣고 반환.
+
+    interest_ids 가 주어지면 해당 카테고리는 Beta(2,1), 그 외는 Beta(1,2). 미제공 시 균등 Beta(1,1).
+    """
+    interest_set = set(int(c) for c in interest_ids) if interest_ids else None
     rows: List[Dict] = []
     out: Dict[int, DeviceBanditRow] = {}
     for cid in categories:
-        rows.append({"d": device_id, "c": int(cid), "a": DEVICE_PRIOR_ALPHA, "b": DEVICE_PRIOR_BETA})
-        out[int(cid)] = DeviceBanditRow(device_id, int(cid), DEVICE_PRIOR_ALPHA, DEVICE_PRIOR_BETA)
+        if interest_set is None:
+            a, b = DEVICE_PRIOR_ALPHA, DEVICE_PRIOR_BETA
+        elif cid in interest_set:
+            a, b = DEVICE_PRIOR_ALPHA_INTEREST, DEVICE_PRIOR_BETA_INTEREST
+        else:
+            a, b = DEVICE_PRIOR_ALPHA_NON_INTEREST, DEVICE_PRIOR_BETA_NON_INTEREST
+        rows.append({"d": device_id, "c": int(cid), "a": a, "b": b})
+        out[int(cid)] = DeviceBanditRow(device_id, int(cid), a, b)
 
     if rows:
         db.execute(
@@ -223,8 +244,12 @@ def _lazy_init_device(db: Session, device_id: str, categories: Iterable[int]) ->
     return out
 
 
-def load_or_init_device(db: Session, device_id: str) -> Dict[int, BanditRow]:
-    """비회원 device 의 (device_id, category_id) state 보장. 인터페이스 호환을 위해 BanditRow 형태로 반환."""
+def load_or_init_device(
+    db: Session,
+    device_id: str,
+    interest_ids: Optional[Iterable[int]] = None,
+) -> Dict[int, BanditRow]:
+    """비회원 device 의 (device_id, category_id) state 보장. interest_ids 는 lazy init 시 prior 결정에만 사용 (이미 row 있으면 무시)."""
     pool_categories = _fetch_pool_categories(db)
     if not pool_categories:
         return {}
@@ -232,15 +257,60 @@ def load_or_init_device(db: Session, device_id: str) -> Dict[int, BanditRow]:
     existing = _fetch_existing_device_state(db, device_id)
     missing = [c for c in pool_categories if c not in existing]
     if missing:
-        new_rows = _lazy_init_device(db, device_id, missing)
+        new_rows = _lazy_init_device(db, device_id, missing, interest_ids)
         existing.update(new_rows)
 
-    # member_id 자리에 0 (sentinel) 두고 BanditRow 로 변환 — sample_thetas / allocate_quota 재사용.
+    # member_id 자리에 0 (sentinel) — sample_thetas / allocate_quota 재사용.
     return {
         cid: BanditRow(member_id=0, category_id=cid, alpha=existing[cid].alpha, beta=existing[cid].beta)
         for cid in pool_categories
         if cid in existing
     }
+
+
+def migrate_device_to_member(db: Session, device_id: str, member_id: int) -> int:
+    """lazy guest 발급 직후 device_category_bandit → member_category_bandit 이관.
+
+    device 가 ground-truth (impression/click 누적). 회원의 새 row 가 prior 만 있으면
+    device 값으로 덮어씀 (해당 (member, category) row 없으면 INSERT).
+    이관 후 device 흔적은 보존 (분석용) — 추후 retention 정책에 따라 정리.
+    Returns 이관 row 수.
+    """
+    rows = db.execute(
+        text("SELECT category_id, alpha, beta, impressions, clicks FROM device_category_bandit WHERE device_id = :d"),
+        {"d": device_id},
+    ).all()
+    if not rows:
+        return 0
+
+    payload = [
+        {
+            "m": int(member_id),
+            "c": int(r[0]),
+            "a": float(r[1]),
+            "b": float(r[2]),
+            "imp": int(r[3]),
+            "clk": int(r[4]),
+        }
+        for r in rows
+    ]
+    db.execute(
+        text(
+            """
+            INSERT INTO member_category_bandit
+                (member_id, category_id, alpha, beta, impressions, clicks)
+            VALUES (:m, :c, :a, :b, :imp, :clk)
+            ON DUPLICATE KEY UPDATE
+                alpha = VALUES(alpha),
+                beta = VALUES(beta),
+                impressions = member_category_bandit.impressions + VALUES(impressions),
+                clicks = member_category_bandit.clicks + VALUES(clicks)
+            """
+        ),
+        payload,
+    )
+    db.commit()
+    return len(payload)
 
 
 def apply_reward_device(db: Session, device_id: str, category_id: int, event_type: str) -> None:
