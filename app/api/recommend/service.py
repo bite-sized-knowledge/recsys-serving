@@ -255,8 +255,8 @@ def _serve(
         if all_ids:
             article_vecs = _fetch_article_vectors(all_ids)
 
-    # 5. 카테고리별 select
-    selected: List[Tuple[str, Optional[int], float]] = []
+    # 5. 카테고리별 select — backfilled flag 같이 추적 (per-row)
+    selected: List[Tuple[str, Optional[int], float, bool]] = []
     seen: set[str] = set()
     for cat_id, q in quota.items():
         chosen = _select_within_category(by_category.get(cat_id, []), q, user_vec, article_vecs)
@@ -264,23 +264,25 @@ def _serve(
             if aid in seen:
                 continue
             seen.add(aid)
-            selected.append((aid, cat_id, float(thetas.get(cat_id, 0.0))))
+            selected.append((aid, cat_id, float(thetas.get(cat_id, 0.0)), False))
 
-    # 6. quota 부족 → weighted random backfill
+    # 6. quota 부족 → weighted random backfill (이 row 들은 backfilled=true)
+    response_was_backfilled = False
     if len(selected) < N_RESULTS:
         _request_metrics["backfilled"] += 1
+        response_was_backfilled = True
         for aid, cid in _backfill(db, N_RESULTS - len(selected), seen, lang, rng):
             theta = float(thetas.get(cid, 0.0)) if cid is not None else 0.0
-            selected.append((aid, cid, theta))
+            selected.append((aid, cid, theta, True))
             seen.add(aid)
 
-    # in-response shuffle
     rng.shuffle(selected)
 
-    # 7. impression log (member_id 또는 device_id, feed_request_id)
+    # 7. impression log + latency (응답 단위 메트릭은 동일 latency_ms, 모든 row 동일 feed_request_id)
+    latency_ms = int((time.perf_counter() - started) * 1000)
     impression_rows = [
-        (aid, cid, pos + 1, theta)
-        for pos, (aid, cid, theta) in enumerate(selected)
+        (aid, cid, pos + 1, theta, was_bf)
+        for pos, (aid, cid, theta, was_bf) in enumerate(selected)
     ]
     log_impressions(
         db,
@@ -288,10 +290,12 @@ def _serve(
         device_id=device_id,
         feed_request_id=feed_request_id,
         rows=impression_rows,
+        latency_ms=latency_ms,
     )
 
-    _record_latency((time.perf_counter() - started) * 1000)
-    return RecommendItem(articles=[aid for aid, _, _ in selected], feed_request_id=feed_request_id)
+    _record_latency(latency_ms)
+    _ = response_was_backfilled  # 응답 단위 flag 는 admin/diagnostics 누적 카운터로만 사용
+    return RecommendItem(articles=[aid for aid, _, _, _ in selected], feed_request_id=feed_request_id)
 
 
 def recommend_feeds(
