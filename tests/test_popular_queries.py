@@ -1,4 +1,15 @@
+import pytest
+
+from app.core.config import config
 from app.services import popular_queries, redis_client
+
+
+@pytest.fixture(autouse=True)
+def _enable_popular_queries():
+    original = config.SEARCH_POPULAR_ENABLED
+    config.SEARCH_POPULAR_ENABLED = True
+    yield
+    config.SEARCH_POPULAR_ENABLED = original
 
 
 def setup_function(_):
@@ -7,6 +18,13 @@ def setup_function(_):
 
 def teardown_module(_):
     redis_client.reset()
+
+
+def test_disabled_short_circuits():
+    config.SEARCH_POPULAR_ENABLED = False
+    popular_queries.record("kubernetes")
+    assert popular_queries.suggest("k", limit=10) == []
+    assert popular_queries.top(10) == []
 
 
 def test_record_increments_count():

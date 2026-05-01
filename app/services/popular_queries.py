@@ -29,6 +29,8 @@ def _normalize(query: str) -> str:
 
 
 def record(query: str) -> None:
+    if not config.SEARCH_POPULAR_ENABLED:
+        return
     norm = _normalize(query)
     if not norm or len(norm) > 200:
         return
@@ -53,6 +55,8 @@ def record(query: str) -> None:
 
 def suggest(prefix: str, limit: int = 8) -> List[str]:
     """prefix로 시작하는 인기 검색어 top-N 반환 (count desc)."""
+    if not config.SEARCH_POPULAR_ENABLED:
+        return []
     norm = _normalize(prefix)
     if not norm:
         # 빈 prefix면 전역 인기 검색어
@@ -86,6 +90,8 @@ def suggest(prefix: str, limit: int = 8) -> List[str]:
 
 
 def top(limit: int = 8) -> List[str]:
+    if not config.SEARCH_POPULAR_ENABLED:
+        return []
     client = redis_client.get_client()
     if client is not None:
         try:
