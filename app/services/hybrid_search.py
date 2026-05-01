@@ -157,14 +157,15 @@ async def hybrid_search(
     else:
         dense_task = None
 
+    min_score = config.SEARCH_DENSE_MIN_SCORE
     if bm25_task is not None and dense_task is not None:
         bm25_ids, dense_results = await asyncio.gather(bm25_task, dense_task)
-        dense_ids = [aid for aid, _ in dense_results]
+        dense_ids = [aid for aid, score in dense_results if score >= min_score]
     elif bm25_task is not None:
         bm25_ids = await bm25_task
     elif dense_task is not None:
         dense_results = await dense_task
-        dense_ids = [aid for aid, _ in dense_results]
+        dense_ids = [aid for aid, score in dense_results if score >= min_score]
 
     if mode is SearchMode.FULLTEXT:
         fused = bm25_ids

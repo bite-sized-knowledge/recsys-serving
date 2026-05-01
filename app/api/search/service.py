@@ -27,7 +27,9 @@ MAX_QUERY_LEN = 200
 
 
 def _query_hash(query: str) -> str:
-    return hashlib.sha1(query.strip().encode("utf-8")).hexdigest()[:12]
+    # MUST stay in sync with bite-api/internal/event/service.go normalizeAndHashQuery
+    # (lower + strip + sha1 → hex 12). 한쪽만 바뀌면 검색 분석 join이 silent하게 깨짐.
+    return hashlib.sha1(query.strip().lower().encode("utf-8")).hexdigest()[:12]
 
 
 def _new_query_id() -> str:

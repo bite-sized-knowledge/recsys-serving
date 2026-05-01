@@ -57,6 +57,12 @@ class Config(BaseSettings):
     SEARCH_DENSE_TOP_N: int = 50
     SEARCH_RRF_K: int = 60
     SEARCH_MAX_POOL: int = 100
+    # Drop dense neighbors below this cosine score before fusion. Without
+    # this, gibberish queries still pull random nearest articles by vector
+    # proximity and BM25 partial substring hits — surfacing low-relevance
+    # results to users. Tune downward if recall drops on legitimate niche
+    # queries.
+    SEARCH_DENSE_MIN_SCORE: float = 0.45
 
     class Config:
         env_file = ".env"
