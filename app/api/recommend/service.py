@@ -1,18 +1,25 @@
 """
-Phase 1+2 추천 서빙.
+Phase 1+2 추천 서빙 (회원 + 비회원).
 
-흐름:
-  1. bandit state load (or lazy init from member_interest)
-  2. Beta TS sample → 각 카테고리 theta
-  3. softmax(theta) × N → 카테고리 quota 분배 (top-K 카테고리)
-  4. recommendation_global 에서 카테고리별 후보 가져옴 (rank_global ASC, quota * candidate_factor)
-  5. Phase 2: user_profile 있으면 within-category rerank by cosine(user_vec, article_vec)
-  6. dedup, position 부여, recommendation_impression 적재 후 응답
+흐름 (회원):
+  1. bandit state load (or lazy init from member_interest) — member_category_bandit
+  2. Beta TS sample → 카테고리별 theta
+  3. softmax(theta / T) × N → 카테고리 quota 분배 (winner-take-all 완화)
+  4. recommendation_global 에서 카테고리별 후보 가져옴 (lang 필터 + ROW_NUMBER 단일 쿼리)
+  5. Phase 2: user_profile 있으면 within-category cosine rerank
+  6. quota 부족시 글로벌 풀 weighted random backfill (deterministic 회피)
+  7. feed_request_id 발급, dedup, position 부여, recommendation_impression 적재
+
+흐름 (비회원, device_id-only):
+  1. device_category_bandit lazy init (균등 prior Beta(1,1))
+  2~6. 위와 동일 (단 user_profile 단계 skip — 회원 전용)
+  7. impression 에 device_id 로 적재
 """
 from __future__ import annotations
 
 import logging
-import random
+import secrets
+import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -22,12 +29,12 @@ from sqlalchemy.orm import Session
 from app.core.config import config
 from app.services import bandit
 from app.services.impression_logger import log_impressions
+from app.services.qdrant_client import get_client
 from app.services.user_vector_lookup import (
     _to_article_point_id,
     cosine,
     get_user_vector,
 )
-from app.services.qdrant_client import get_client
 
 from .schema import RecommendItem
 
@@ -36,6 +43,34 @@ log = logging.getLogger(__name__)
 N_RESULTS = 10
 TOP_K_CATEGORIES = 6
 CANDIDATE_MULTIPLIER = 4  # quota * 4 만큼 카테고리 후보 가져와 rerank
+BACKFILL_POOL_SIZE = 50    # 글로벌 풀 backfill 시 weighted random 모집단
+
+# 메트릭 카운터 — admin/diagnostics 에서 노출. 휘발성 (process restart 시 reset).
+_request_metrics: Dict[str, int] = {"requests": 0, "anonymous": 0, "backfilled": 0}
+_latency_ms: List[float] = []  # 최근 1024 요청
+_LATENCY_BUF = 1024
+
+
+def get_request_metrics() -> Dict[str, float]:
+    """미들웨어/diagnostics 가 읽을 가벼운 인메모리 메트릭."""
+    snap = dict(_request_metrics)
+    if _latency_ms:
+        arr = np.asarray(_latency_ms)
+        snap["latency_p50_ms"] = float(np.percentile(arr, 50))
+        snap["latency_p95_ms"] = float(np.percentile(arr, 95))
+        snap["latency_n"] = len(arr)
+    return snap
+
+
+def _record_latency(ms: float) -> None:
+    _latency_ms.append(ms)
+    if len(_latency_ms) > _LATENCY_BUF:
+        del _latency_ms[: len(_latency_ms) - _LATENCY_BUF]
+
+
+def _gen_feed_request_id() -> str:
+    """uuid4 hex 32자 — bite-api 와 bite-web 이 echo 해 user_events.feed_request_id 로 join."""
+    return secrets.token_hex(16)
 
 
 _POOL_BY_CATEGORY_SQL = text(
@@ -47,6 +82,7 @@ _POOL_BY_CATEGORY_SQL = text(
         ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY rank_global ASC) AS rn
       FROM recommendation_global
       WHERE category_id IN :cats
+        AND (:lang IS NULL OR lang = :lang OR lang IS NULL)
     ) t
     WHERE rn <= :n
     """
@@ -57,11 +93,8 @@ def _fetch_pool_for_categories(
     db: Session,
     quota: Dict[int, int],
     multiplier: int,
+    lang: Optional[str],
 ) -> Dict[int, List[Tuple[str, float, float]]]:
-    """
-    카테고리별 후보 [(article_id, score, rank_global)] 단일 쿼리.
-    multiplier=1 (rerank 없음, quota 만큼) / >1 (rerank 용 더 가져옴).
-    """
     if not quota:
         return {}
 
@@ -70,7 +103,10 @@ def _fetch_pool_for_categories(
         return {}
 
     max_per_cat = max(quota[c] for c in cat_ids) * max(1, multiplier)
-    rows = db.execute(_POOL_BY_CATEGORY_SQL, {"cats": cat_ids, "n": int(max_per_cat)}).all()
+    rows = db.execute(
+        _POOL_BY_CATEGORY_SQL,
+        {"cats": cat_ids, "n": int(max_per_cat), "lang": lang},
+    ).all()
 
     out: Dict[int, List[Tuple[str, float, float]]] = {c: [] for c in cat_ids}
     for r in rows:
@@ -112,111 +148,159 @@ def _select_within_category(
     user_vec: Optional[np.ndarray],
     article_vecs: Dict[str, np.ndarray],
 ) -> List[Tuple[str, float]]:
-    """카테고리 후보 중 quota 개 선택. Phase 2 user_vec 있으면 cosine rerank."""
     if not candidates or quota <= 0:
         return []
 
     if user_vec is None:
-        # Phase 1 fallback: 글로벌 score 그대로
         return [(aid, score) for aid, score, _rank in candidates[:quota]]
 
     scored: List[Tuple[str, float]] = []
     for aid, score, _rank in candidates:
         v = article_vecs.get(aid)
         if v is None:
-            # 임베딩 missing — 글로벌 score 그대로 (낮은 우선순위)
             scored.append((aid, score * 0.5))
             continue
         sim = cosine(user_vec, v)
-        # 0.7 * 글로벌 + 0.3 * 유사도
         combined = 0.7 * score + 0.3 * (sim + 1.0) / 2.0
         scored.append((aid, combined))
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:quota]
 
 
-def recommend_feeds(db: Session, member_id: int) -> RecommendItem:
+def _backfill(
+    db: Session,
+    needed: int,
+    seen_ids: set,
+    lang: Optional[str],
+    rng: np.random.Generator,
+) -> List[Tuple[str, Optional[int]]]:
+    """글로벌 풀 top-N 에서 score-weighted random sample (deterministic 회피)."""
+    if needed <= 0:
+        return []
+
+    rows = db.execute(
+        text(
+            """
+            SELECT article_id, category_id, score
+            FROM recommendation_global
+            WHERE (:lang IS NULL OR lang = :lang OR lang IS NULL)
+            ORDER BY rank_global ASC
+            LIMIT :n
+            """
+        ),
+        {"n": BACKFILL_POOL_SIZE + len(seen_ids), "lang": lang},
+    ).all()
+
+    pool = [(str(r[0]), (int(r[1]) if r[1] is not None else None), float(r[2])) for r in rows if str(r[0]) not in seen_ids]
+    if not pool:
+        return []
+
+    weights = np.asarray([s for _, _, s in pool], dtype=np.float64)
+    weights = np.clip(weights, 1e-6, None)
+    probs = weights / weights.sum()
+    take = min(needed, len(pool))
+    idxs = rng.choice(len(pool), size=take, replace=False, p=probs)
+    return [(pool[i][0], pool[i][1]) for i in idxs]
+
+
+def _serve(
+    db: Session,
+    member_id: Optional[int],
+    device_id: Optional[str],
+    lang: Optional[str],
+) -> RecommendItem:
+    """회원/비회원 공통 서빙 흐름. anonymous 는 bandit 만 device 테이블."""
+    started = time.perf_counter()
+    is_anonymous = member_id is None
+    rng = np.random.default_rng()
+    feed_request_id = _gen_feed_request_id()
+
+    _request_metrics["requests"] += 1
+    if is_anonymous:
+        _request_metrics["anonymous"] += 1
+
     # 1. bandit state
-    state = bandit.load_or_init(db, member_id)
+    if is_anonymous:
+        state = bandit.load_or_init_device(db, device_id)  # type: ignore[arg-type]
+    else:
+        state = bandit.load_or_init(db, int(member_id))
     if not state:
-        log.info("recommendation_global 비어있음 또는 풀에 카테고리 없음 → 빈 응답")
+        log.info("recommendation_global 비어있거나 풀에 카테고리 없음 → 빈 응답")
+        _record_latency((time.perf_counter() - started) * 1000)
         return RecommendItem(articles=[])
 
     # 2. TS sample
-    rng = np.random.default_rng()
     thetas = bandit.sample_thetas(state, rng=rng)
 
-    # 3. quota 분배
+    # 3. quota 분배 (softmax temperature 적용 — bandit.QUOTA_TEMPERATURE)
     quota = bandit.allocate_quota(thetas, N_RESULTS, top_k_categories=TOP_K_CATEGORIES)
     if not quota:
+        _record_latency((time.perf_counter() - started) * 1000)
         return RecommendItem(articles=[])
 
-    # 4. Phase 2 user vector — 있으면 within-category rerank 위해 4배 가져오기, 없으면 quota 만큼
-    user_vec = get_user_vector(member_id)
+    # 4. Phase 2 user vector — 회원 전용
+    user_vec = None if is_anonymous else get_user_vector(int(member_id))
     multiplier = CANDIDATE_MULTIPLIER if user_vec is not None else 1
-    by_category = _fetch_pool_for_categories(db, quota, multiplier=multiplier)
+    by_category = _fetch_pool_for_categories(db, quota, multiplier=multiplier, lang=lang)
 
     article_vecs: Dict[str, np.ndarray] = {}
     if user_vec is not None:
-        all_candidate_ids: List[str] = []
+        all_ids: List[str] = []
         for cands in by_category.values():
-            all_candidate_ids.extend(aid for aid, _, _ in cands)
-        if all_candidate_ids:
-            article_vecs = _fetch_article_vectors(all_candidate_ids)
+            all_ids.extend(aid for aid, _, _ in cands)
+        if all_ids:
+            article_vecs = _fetch_article_vectors(all_ids)
 
     # 5. 카테고리별 select
     selected: List[Tuple[str, Optional[int], float]] = []
-    seen_ids: set[str] = set()
+    seen: set[str] = set()
     for cat_id, q in quota.items():
-        cands = by_category.get(cat_id, [])
-        chosen = _select_within_category(cands, q, user_vec, article_vecs)
+        chosen = _select_within_category(by_category.get(cat_id, []), q, user_vec, article_vecs)
         for aid, _ in chosen:
-            if aid in seen_ids:
+            if aid in seen:
                 continue
-            seen_ids.add(aid)
+            seen.add(aid)
             selected.append((aid, cat_id, float(thetas.get(cat_id, 0.0))))
 
-    # quota 부족 → 글로벌 풀로 backfill (top by rank_global)
+    # 6. quota 부족 → weighted random backfill
     if len(selected) < N_RESULTS:
-        fill_n = N_RESULTS - len(selected)
-        rows = db.execute(
-            text(
-                "SELECT article_id, category_id FROM recommendation_global "
-                "ORDER BY rank_global ASC LIMIT :n"
-            ),
-            {"n": fill_n + len(seen_ids)},
-        ).all()
-        for r in rows:
-            aid = str(r[0])
-            if aid in seen_ids:
-                continue
-            cid = int(r[1]) if r[1] is not None else None
-            theta_val = float(thetas.get(cid, 0.0)) if cid is not None else 0.0
-            selected.append((aid, cid, theta_val))
-            seen_ids.add(aid)
-            if len(selected) >= N_RESULTS:
-                break
+        _request_metrics["backfilled"] += 1
+        for aid, cid in _backfill(db, N_RESULTS - len(selected), seen, lang, rng):
+            theta = float(thetas.get(cid, 0.0)) if cid is not None else 0.0
+            selected.append((aid, cid, theta))
+            seen.add(aid)
 
+    # in-response shuffle
     rng.shuffle(selected)
 
-    # 6. impression log (Optional cid 그대로 전달 — DB 컬럼 NULL 허용)
+    # 7. impression log (member_id 또는 device_id, feed_request_id)
     impression_rows = [
         (aid, cid, pos + 1, theta)
         for pos, (aid, cid, theta) in enumerate(selected)
     ]
-    log_impressions(db, member_id, impression_rows)
+    log_impressions(
+        db,
+        member_id=member_id,
+        device_id=device_id,
+        feed_request_id=feed_request_id,
+        rows=impression_rows,
+    )
 
-    return RecommendItem(articles=[aid for aid, _, _ in selected])
+    _record_latency((time.perf_counter() - started) * 1000)
+    return RecommendItem(articles=[aid for aid, _, _ in selected], feed_request_id=feed_request_id)
 
 
-def recommend_feeds_anonymous(db: Session) -> RecommendItem:
-    """비로그인 fallback — phase 1+2 입력(member bandit/user_profile)이 없어
-    글로벌 풀 top-N 만 반환. device_id 기반 personalization 은 미구현."""
-    rows = db.execute(
-        text(
-            "SELECT article_id FROM recommendation_global "
-            "ORDER BY rank_global ASC LIMIT :n"
-        ),
-        {"n": N_RESULTS},
-    ).all()
-    return RecommendItem(articles=[str(r[0]) for r in rows])
+def recommend_feeds(
+    db: Session,
+    member_id: int,
+    lang: Optional[str] = None,
+) -> RecommendItem:
+    return _serve(db, member_id=int(member_id), device_id=None, lang=lang)
+
+
+def recommend_feeds_anonymous(
+    db: Session,
+    device_id: str,
+    lang: Optional[str] = None,
+) -> RecommendItem:
+    return _serve(db, member_id=None, device_id=str(device_id), lang=lang)

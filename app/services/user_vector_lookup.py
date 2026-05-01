@@ -10,11 +10,19 @@ import uuid
 from typing import Optional
 
 import numpy as np
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.core.config import config
 from app.services.qdrant_client import get_client
 
 log = logging.getLogger(__name__)
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    """Qdrant 의 collection/point 미존재 분기 — 정식 예외 타입."""
+    if isinstance(exc, UnexpectedResponse):
+        return getattr(exc, "status_code", None) == 404
+    return False
 
 USER_PROFILE_COLLECTION = "user_profile"
 # 실시간 incremental EMA: new = decay * old + (1 - decay) * article_vec.
@@ -40,8 +48,7 @@ def get_user_vector(member_id: int) -> Optional[np.ndarray]:
             with_payload=False,
         )
     except Exception as exc:
-        msg = str(exc).lower()
-        if "not found" in msg or "doesn't exist" in msg:
+        if _is_not_found(exc):
             return None
         log.warning("user_profile retrieve failed for member %s: %s", member_id, exc)
         return None
@@ -106,8 +113,7 @@ def push_event_to_profile(member_id: int, article_id: str) -> bool:
         )
         return True
     except Exception as exc:
-        msg = str(exc).lower()
-        if "doesn't exist" in msg or "not found" in msg:
+        if _is_not_found(exc):
             log.info("user_profile collection 미존재 — recommender 배치가 만들 때까지 skip")
             return False
         log.warning("user_profile upsert failed (member %s): %s", member_id, exc)
