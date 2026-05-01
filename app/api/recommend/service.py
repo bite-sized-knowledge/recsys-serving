@@ -207,3 +207,16 @@ def recommend_feeds(db: Session, member_id: int) -> RecommendItem:
     log_impressions(db, member_id, impression_rows)
 
     return RecommendItem(articles=[aid for aid, _, _ in selected])
+
+
+def recommend_feeds_anonymous(db: Session) -> RecommendItem:
+    """비로그인 fallback — phase 1+2 입력(member bandit/user_profile)이 없어
+    글로벌 풀 top-N 만 반환. device_id 기반 personalization 은 미구현."""
+    rows = db.execute(
+        text(
+            "SELECT article_id FROM recommendation_global "
+            "ORDER BY rank_global ASC LIMIT :n"
+        ),
+        {"n": N_RESULTS},
+    ).all()
+    return RecommendItem(articles=[str(r[0]) for r in rows])
