@@ -1,7 +1,10 @@
-"""Per-(member, category) Beta Thompson Sampling.
+"""Per-(member|device, category) Beta Thompson Sampling.
 
-Lazy init: 첫 호출 시 member_interest 기반 prior 채워 INSERT.
-실시간 reward update: feedback endpoint에서 incremental.
+회원 (`member_category_bandit`) 과 비회원 device (`device_category_bandit`) 가
+같은 알고리즘을 공유하되 PK 컬럼만 다름 — 공통 helper 로 일반화하고 prior 결정만 분기.
+
+Lazy init: 첫 호출 시 onboarding (회원) 또는 X-Interest-Ids (비회원) 기반 prior 채워 INSERT.
+실시간 reward: feedback endpoint 가 incremental UPDATE.
 배치 reconcile (recommender) 가 매일 ground-truth 로 overwrite.
 """
 from __future__ import annotations
@@ -9,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 from sqlalchemy import text
@@ -48,29 +51,117 @@ DEVICE_PRIOR_BETA_INTEREST = 1.0
 DEVICE_PRIOR_ALPHA_NON_INTEREST = 1.0
 DEVICE_PRIOR_BETA_NON_INTEREST = 2.0
 
+# 테이블 ↔ PK 컬럼 매핑. 호출자 (서비스/피드백) 가 직접 string 안 쓰도록.
+_TABLE_MEMBER = "member_category_bandit"
+_TABLE_DEVICE = "device_category_bandit"
+_KEY_MEMBER = "member_id"
+_KEY_DEVICE = "device_id"
 
-@dataclass
+
+@dataclass(frozen=True)
 class BanditRow:
-    member_id: int
+    """member_id (int) 또는 device_id (str) 를 동일 dataclass 로. sample_thetas 가 alpha/beta 만 본다."""
+    key: Union[int, str]
     category_id: int
     alpha: float
     beta: float
 
 
-def _fetch_member_interests(db: Session, member_id: int) -> List[int]:
-    rows = db.execute(
-        text("SELECT interest_id FROM member_interest WHERE member_id = :m"),
-        {"m": member_id},
-    ).all()
-    return [int(r[0]) for r in rows]
+# Prior decision: (category_id) → (alpha, beta).
+PriorFn = Callable[[int], Tuple[float, float]]
 
 
-# 글로벌 풀은 매일 1회 swap. 카테고리 set 만 알면 되므로 process-level TTL 캐시.
+# ---------------------------------------------------------------------------
+# Generic SQL helpers — 테이블/키 컬럼만 다르고 logic 동일
+# ---------------------------------------------------------------------------
+
+def _fetch_existing_bandit(
+    db: Session, table: str, key_col: str, key_val: Union[int, str]
+) -> Dict[int, BanditRow]:
+    """SELECT category_id, alpha, beta FROM <table> WHERE <key_col> = :k"""
+    sql = f"SELECT category_id, alpha, beta FROM {table} WHERE {key_col} = :k"
+    rows = db.execute(text(sql), {"k": key_val}).all()
+    return {
+        int(r[0]): BanditRow(key=key_val, category_id=int(r[0]), alpha=float(r[1]), beta=float(r[2]))
+        for r in rows
+    }
+
+
+def _insert_bandit_priors(
+    db: Session,
+    table: str,
+    key_col: str,
+    key_val: Union[int, str],
+    categories: Iterable[int],
+    prior_fn: PriorFn,
+) -> Dict[int, BanditRow]:
+    """카테고리들에 대해 prior INSERT (ON DUPLICATE KEY UPDATE alpha=alpha 로 멱등). 반환은 만들어진 row dict."""
+    payload: List[Dict] = []
+    out: Dict[int, BanditRow] = {}
+    for cid in categories:
+        a, b = prior_fn(int(cid))
+        payload.append({"k": key_val, "c": int(cid), "a": a, "b": b})
+        out[int(cid)] = BanditRow(key=key_val, category_id=int(cid), alpha=a, beta=b)
+
+    if payload:
+        sql = (
+            f"INSERT INTO {table} ({key_col}, category_id, alpha, beta) "
+            f"VALUES (:k, :c, :a, :b) "
+            f"ON DUPLICATE KEY UPDATE alpha = alpha"
+        )
+        db.execute(text(sql), payload)
+        db.commit()
+    return out
+
+
+def _apply_reward_generic(
+    db: Session,
+    table: str,
+    key_col: str,
+    key_val: Union[int, str],
+    category_id: int,
+    event_type: str,
+    prior_alpha: float,
+    prior_beta: float,
+) -> None:
+    """incremental α/β delta + clicks 카운터. event_type 이 reward 매핑에 없으면 no-op."""
+    et = event_type.lower()
+    da = REWARD_ALPHA.get(et, 0.0)
+    db_ = REWARD_BETA.get(et, 0.0)
+    if da == 0.0 and db_ == 0.0:
+        return
+
+    sql = (
+        f"INSERT INTO {table} ({key_col}, category_id, alpha, beta, clicks) "
+        f"VALUES (:k, :c, :pa, :pb, :clk) "
+        f"ON DUPLICATE KEY UPDATE "
+        f"alpha = alpha + :da, beta = beta + :db_, clicks = clicks + :clk"
+    )
+    db.execute(
+        text(sql),
+        {
+            "k": key_val,
+            "c": int(category_id),
+            "pa": prior_alpha + da,
+            "pb": prior_beta + db_,
+            "da": da,
+            "db_": db_,
+            "clk": 1 if et in REWARD_ALPHA else 0,
+        },
+    )
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# 글로벌 풀 카테고리 (TTL 캐시) + 회원 onboarding 보조 SELECT
+# ---------------------------------------------------------------------------
+
 _POOL_CAT_TTL_SEC = 300
 _pool_cat_cache: Tuple[float, List[int]] = (0.0, [])
 
 
 def _fetch_pool_categories(db: Session) -> List[int]:
+    """글로벌 풀의 distinct category_id. 풀은 일 1회 swap 이라 process-level TTL 캐시."""
     global _pool_cat_cache
     now = time.time()
     cached_at, cached = _pool_cat_cache
@@ -84,64 +175,124 @@ def _fetch_pool_categories(db: Session) -> List[int]:
     return fresh
 
 
-def _fetch_existing_state(db: Session, member_id: int) -> Dict[int, BanditRow]:
+def _fetch_member_interests(db: Session, member_id: int) -> List[int]:
     rows = db.execute(
-        text("SELECT category_id, alpha, beta FROM member_category_bandit WHERE member_id = :m"),
+        text("SELECT interest_id FROM member_interest WHERE member_id = :m"),
         {"m": member_id},
     ).all()
-    return {
-        int(r[0]): BanditRow(
-            member_id=member_id, category_id=int(r[0]), alpha=float(r[1]), beta=float(r[2])
-        )
-        for r in rows
-    }
+    return [int(r[0]) for r in rows]
 
 
-def _lazy_init(db: Session, member_id: int, categories: Iterable[int]) -> Dict[int, BanditRow]:
-    """member_category_bandit 에 prior 로 row 채워넣고 반환."""
-    onboarding = set(_fetch_member_interests(db, member_id))
-    rows: List[Dict] = []
-    out: Dict[int, BanditRow] = {}
-    for cid in categories:
-        if cid in onboarding:
-            a, b = PRIOR_ALPHA_ONBOARDING, PRIOR_BETA_ONBOARDING
-        else:
-            a, b = PRIOR_ALPHA_DEFAULT, PRIOR_BETA_DEFAULT
-        rows.append({"m": member_id, "c": int(cid), "a": a, "b": b})
-        out[int(cid)] = BanditRow(member_id, int(cid), a, b)
+# ---------------------------------------------------------------------------
+# Prior 결정 함수
+# ---------------------------------------------------------------------------
 
-    if rows:
-        db.execute(
-            text(
-                """
-                INSERT INTO member_category_bandit (member_id, category_id, alpha, beta)
-                VALUES (:m, :c, :a, :b)
-                ON DUPLICATE KEY UPDATE alpha = alpha
-                """
-            ),
-            rows,
-        )
-        db.commit()
-    return out
+def _member_prior_fn(onboarding_set: set) -> PriorFn:
+    def fn(cid: int) -> Tuple[float, float]:
+        if cid in onboarding_set:
+            return PRIOR_ALPHA_ONBOARDING, PRIOR_BETA_ONBOARDING
+        return PRIOR_ALPHA_DEFAULT, PRIOR_BETA_DEFAULT
+    return fn
 
+
+def _device_prior_fn(interest_set: Optional[set]) -> PriorFn:
+    def fn(cid: int) -> Tuple[float, float]:
+        if interest_set is None:
+            return DEVICE_PRIOR_ALPHA, DEVICE_PRIOR_BETA
+        if cid in interest_set:
+            return DEVICE_PRIOR_ALPHA_INTEREST, DEVICE_PRIOR_BETA_INTEREST
+        return DEVICE_PRIOR_ALPHA_NON_INTEREST, DEVICE_PRIOR_BETA_NON_INTEREST
+    return fn
+
+
+# ---------------------------------------------------------------------------
+# Public API — service.py / feedback.py 가 호출. 시그니처/동작은 phase 1.6 그대로.
+# ---------------------------------------------------------------------------
 
 def load_or_init(db: Session, member_id: int) -> Dict[int, BanditRow]:
-    """현재 풀에 있는 카테고리 모두에 대해 (member_id, category_id) state 보장."""
+    """회원: 풀 카테고리 set 에 대해 (member_id, category_id) state 보장."""
     pool_categories = _fetch_pool_categories(db)
     if not pool_categories:
         return {}
 
-    existing = _fetch_existing_state(db, member_id)
+    existing = _fetch_existing_bandit(db, _TABLE_MEMBER, _KEY_MEMBER, int(member_id))
     missing = [c for c in pool_categories if c not in existing]
     if missing:
-        new_rows = _lazy_init(db, member_id, missing)
+        prior_fn = _member_prior_fn(set(_fetch_member_interests(db, int(member_id))))
+        new_rows = _insert_bandit_priors(db, _TABLE_MEMBER, _KEY_MEMBER, int(member_id), missing, prior_fn)
         existing.update(new_rows)
-    # 풀에 있는 카테고리만 반환 (drop된 카테고리는 무시)
     return {cid: existing[cid] for cid in pool_categories if cid in existing}
 
 
-def sample_thetas(state: Dict[int, BanditRow], rng: Optional[np.random.Generator] = None) -> Dict[int, float]:
-    """Beta(α, β) sample per category."""
+def load_or_init_device(
+    db: Session,
+    device_id: str,
+    interest_ids: Optional[Iterable[int]] = None,
+) -> Dict[int, BanditRow]:
+    """비회원 device: state 보장. interest_ids 는 lazy init prior 결정에만 사용 (이미 row 있으면 무시)."""
+    pool_categories = _fetch_pool_categories(db)
+    if not pool_categories:
+        return {}
+
+    existing = _fetch_existing_bandit(db, _TABLE_DEVICE, _KEY_DEVICE, str(device_id))
+    missing = [c for c in pool_categories if c not in existing]
+    if missing:
+        interest_set = set(int(c) for c in interest_ids) if interest_ids else None
+        prior_fn = _device_prior_fn(interest_set)
+        new_rows = _insert_bandit_priors(db, _TABLE_DEVICE, _KEY_DEVICE, str(device_id), missing, prior_fn)
+        existing.update(new_rows)
+    return {cid: existing[cid] for cid in pool_categories if cid in existing}
+
+
+def apply_reward(db: Session, member_id: int, category_id: int, event_type: str) -> None:
+    _apply_reward_generic(
+        db, _TABLE_MEMBER, _KEY_MEMBER, int(member_id), category_id, event_type,
+        PRIOR_ALPHA_DEFAULT, PRIOR_BETA_DEFAULT,
+    )
+
+
+def apply_reward_device(db: Session, device_id: str, category_id: int, event_type: str) -> None:
+    _apply_reward_generic(
+        db, _TABLE_DEVICE, _KEY_DEVICE, str(device_id), category_id, event_type,
+        DEVICE_PRIOR_ALPHA, DEVICE_PRIOR_BETA,
+    )
+
+
+def migrate_device_to_member(db: Session, device_id: str, member_id: int) -> int:
+    """lazy guest 발급 직후 device_category_bandit → member_category_bandit 단일 INSERT...SELECT 이관.
+
+    device 가 ground-truth (impression/click 누적). 회원 row 가 prior 만 있으면 device 값으로 덮어씀.
+    이관 후 device 흔적은 보존 (분석용).
+    rowcount: ON DUPLICATE KEY UPDATE 의 INSERT 1 / UPDATE 2 추가 규칙 때문에 정확한 source row 수 아님.
+    """
+    result = db.execute(
+        text(
+            f"""
+            INSERT INTO {_TABLE_MEMBER} (member_id, category_id, alpha, beta, impressions, clicks)
+            SELECT :m, category_id, alpha, beta, impressions, clicks
+            FROM {_TABLE_DEVICE}
+            WHERE device_id = :d
+            ON DUPLICATE KEY UPDATE
+                alpha = VALUES(alpha),
+                beta = VALUES(beta),
+                impressions = {_TABLE_MEMBER}.impressions + VALUES(impressions),
+                clicks = {_TABLE_MEMBER}.clicks + VALUES(clicks)
+            """
+        ),
+        {"m": int(member_id), "d": device_id},
+    )
+    db.commit()
+    return int(result.rowcount or 0)
+
+
+# ---------------------------------------------------------------------------
+# Sampling / quota — state dataclass key 무시, alpha/beta 만 사용.
+# ---------------------------------------------------------------------------
+
+def sample_thetas(
+    state: Mapping[int, BanditRow],
+    rng: Optional[np.random.Generator] = None,
+) -> Dict[int, float]:
     if rng is None:
         rng = np.random.default_rng()
     return {cid: float(rng.beta(row.alpha, row.beta)) for cid, row in state.items()}
@@ -153,13 +304,7 @@ def allocate_quota(
     top_k_categories: int = 6,
     temperature: float = QUOTA_TEMPERATURE,
 ) -> Dict[int, int]:
-    """
-    softmax(theta / T) → quota proportions → integer rounding (sum = n_results).
-
-    상위 K 카테고리만 추출해서 quota 분배 (long-tail 다이버시티는 글로벌 풀 빌드 단계에서 보장됨).
-    rounding 잔차는 가장 큰 fractional remainder 카테고리에 할당.
-    Temperature > 1 면 quota 가 더 평탄해져 winner-take-all 완화.
-    """
+    """softmax(theta / T) × N → 카테고리별 quota. T>1 이면 평탄화 (winner-take-all 완화)."""
     if not thetas or n_results <= 0:
         return {}
 
@@ -167,7 +312,6 @@ def allocate_quota(
     cats = [c for c, _ in items]
     vals = np.asarray([v for _, v in items], dtype=np.float64) / max(temperature, 1e-6)
 
-    # softmax with temperature
     e = np.exp(vals - vals.max())
     probs = e / e.sum()
 
@@ -175,190 +319,9 @@ def allocate_quota(
     base = np.floor(raw).astype(int)
     remaining = n_results - int(base.sum())
     if remaining > 0:
-        # 가장 큰 fractional remainder 부터 1씩
         frac = raw - base
         order = np.argsort(-frac)
         for i in order[:remaining]:
             base[i] += 1
 
-    # 0 quota 카테고리 drop
     return {cats[i]: int(base[i]) for i in range(len(cats)) if base[i] > 0}
-
-
-@dataclass
-class DeviceBanditRow:
-    device_id: str
-    category_id: int
-    alpha: float
-    beta: float
-
-
-def _fetch_existing_device_state(db: Session, device_id: str) -> Dict[int, DeviceBanditRow]:
-    rows = db.execute(
-        text("SELECT category_id, alpha, beta FROM device_category_bandit WHERE device_id = :d"),
-        {"d": device_id},
-    ).all()
-    return {
-        int(r[0]): DeviceBanditRow(
-            device_id=device_id, category_id=int(r[0]), alpha=float(r[1]), beta=float(r[2])
-        )
-        for r in rows
-    }
-
-
-def _lazy_init_device(
-    db: Session,
-    device_id: str,
-    categories: Iterable[int],
-    interest_ids: Optional[Iterable[int]] = None,
-) -> Dict[int, DeviceBanditRow]:
-    """device_category_bandit 에 prior 로 row 채워넣고 반환.
-
-    interest_ids 가 주어지면 해당 카테고리는 Beta(2,1), 그 외는 Beta(1,2). 미제공 시 균등 Beta(1,1).
-    """
-    interest_set = set(int(c) for c in interest_ids) if interest_ids else None
-    rows: List[Dict] = []
-    out: Dict[int, DeviceBanditRow] = {}
-    for cid in categories:
-        if interest_set is None:
-            a, b = DEVICE_PRIOR_ALPHA, DEVICE_PRIOR_BETA
-        elif cid in interest_set:
-            a, b = DEVICE_PRIOR_ALPHA_INTEREST, DEVICE_PRIOR_BETA_INTEREST
-        else:
-            a, b = DEVICE_PRIOR_ALPHA_NON_INTEREST, DEVICE_PRIOR_BETA_NON_INTEREST
-        rows.append({"d": device_id, "c": int(cid), "a": a, "b": b})
-        out[int(cid)] = DeviceBanditRow(device_id, int(cid), a, b)
-
-    if rows:
-        db.execute(
-            text(
-                """
-                INSERT INTO device_category_bandit (device_id, category_id, alpha, beta)
-                VALUES (:d, :c, :a, :b)
-                ON DUPLICATE KEY UPDATE alpha = alpha
-                """
-            ),
-            rows,
-        )
-        db.commit()
-    return out
-
-
-def load_or_init_device(
-    db: Session,
-    device_id: str,
-    interest_ids: Optional[Iterable[int]] = None,
-) -> Dict[int, BanditRow]:
-    """비회원 device 의 (device_id, category_id) state 보장. interest_ids 는 lazy init 시 prior 결정에만 사용 (이미 row 있으면 무시)."""
-    pool_categories = _fetch_pool_categories(db)
-    if not pool_categories:
-        return {}
-
-    existing = _fetch_existing_device_state(db, device_id)
-    missing = [c for c in pool_categories if c not in existing]
-    if missing:
-        new_rows = _lazy_init_device(db, device_id, missing, interest_ids)
-        existing.update(new_rows)
-
-    # member_id 자리에 0 (sentinel) — sample_thetas / allocate_quota 재사용.
-    return {
-        cid: BanditRow(member_id=0, category_id=cid, alpha=existing[cid].alpha, beta=existing[cid].beta)
-        for cid in pool_categories
-        if cid in existing
-    }
-
-
-def migrate_device_to_member(db: Session, device_id: str, member_id: int) -> int:
-    """lazy guest 발급 직후 device_category_bandit → member_category_bandit 이관.
-
-    device 가 ground-truth (impression/click 누적). 회원의 새 row 가 prior 만 있으면
-    device 값으로 덮어씀. 단일 INSERT ... SELECT — round-trip 1회.
-    이관 후 device 흔적은 보존 (분석용) — 추후 retention 정책에 따라 정리.
-    Returns 이관 row 수 (driver rowcount).
-    """
-    result = db.execute(
-        text(
-            """
-            INSERT INTO member_category_bandit
-                (member_id, category_id, alpha, beta, impressions, clicks)
-            SELECT :m, category_id, alpha, beta, impressions, clicks
-            FROM device_category_bandit
-            WHERE device_id = :d
-            ON DUPLICATE KEY UPDATE
-                alpha = VALUES(alpha),
-                beta = VALUES(beta),
-                impressions = member_category_bandit.impressions + VALUES(impressions),
-                clicks = member_category_bandit.clicks + VALUES(clicks)
-            """
-        ),
-        {"m": int(member_id), "d": device_id},
-    )
-    db.commit()
-    # rowcount: ON DUPLICATE KEY UPDATE 는 INSERT 시 1, UPDATE 시 2 를 더하므로 정확한 row 수 아님.
-    # 정확한 source row 수가 꼭 필요하면 별도 SELECT COUNT 로 가능 — 현재는 진단용이라 raw rowcount 그대로.
-    return int(result.rowcount or 0)
-
-
-def apply_reward_device(db: Session, device_id: str, category_id: int, event_type: str) -> None:
-    """비회원 device 의 incremental reward."""
-    et = event_type.lower()
-    da = REWARD_ALPHA.get(et, 0.0)
-    db_ = REWARD_BETA.get(et, 0.0)
-    if da == 0.0 and db_ == 0.0:
-        return
-
-    db.execute(
-        text(
-            """
-            INSERT INTO device_category_bandit (device_id, category_id, alpha, beta, clicks)
-            VALUES (:d, :c, :pa, :pb, :clk)
-            ON DUPLICATE KEY UPDATE
-                alpha  = alpha + :da,
-                beta   = beta  + :db_,
-                clicks = clicks + :clk
-            """
-        ),
-        {
-            "d": device_id,
-            "c": int(category_id),
-            "pa": (DEVICE_PRIOR_ALPHA + da),
-            "pb": (DEVICE_PRIOR_BETA + db_),
-            "da": da,
-            "db_": db_,
-            "clk": 1 if et in REWARD_ALPHA else 0,
-        },
-    )
-    db.commit()
-
-
-def apply_reward(db: Session, member_id: int, category_id: int, event_type: str) -> None:
-    """실시간 incremental update. 이벤트 타입별 α/β delta 적용."""
-    et = event_type.lower()
-    da = REWARD_ALPHA.get(et, 0.0)
-    db_ = REWARD_BETA.get(et, 0.0)
-    if da == 0.0 and db_ == 0.0:
-        return
-
-    db.execute(
-        text(
-            """
-            INSERT INTO member_category_bandit (member_id, category_id, alpha, beta, clicks)
-            VALUES (:m, :c, :pa, :pb, :clk)
-            ON DUPLICATE KEY UPDATE
-                alpha  = alpha + :da,
-                beta   = beta  + :db_,
-                clicks = clicks + :clk
-            """
-        ),
-        {
-            "m": int(member_id),
-            "c": int(category_id),
-            # 새로 만들 때 prior + delta (existing이면 ON DUPLICATE 분기)
-            "pa": (PRIOR_ALPHA_DEFAULT + da),
-            "pb": (PRIOR_BETA_DEFAULT + db_),
-            "da": da,
-            "db_": db_,
-            "clk": 1 if et in REWARD_ALPHA else 0,
-        },
-    )
-    db.commit()

@@ -223,10 +223,12 @@ def _serve(
     if is_anonymous:
         _request_metrics["anonymous"] += 1
 
-    # 1. bandit state
+    # 1. bandit state — controller 에서 둘 중 하나는 보장 (없으면 400).
     if is_anonymous:
-        state = bandit.load_or_init_device(db, device_id, interest_ids=interest_ids)  # type: ignore[arg-type]
+        assert device_id is not None
+        state = bandit.load_or_init_device(db, device_id, interest_ids=interest_ids)
     else:
+        assert member_id is not None
         state = bandit.load_or_init(db, int(member_id))
     if not state:
         log.info("recommendation_global 비어있거나 풀에 카테고리 없음 → 빈 응답")
