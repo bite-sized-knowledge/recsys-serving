@@ -266,11 +266,9 @@ def _serve(
             seen.add(aid)
             selected.append((aid, cat_id, float(thetas.get(cat_id, 0.0)), False))
 
-    # 6. quota 부족 → weighted random backfill (이 row 들은 backfilled=true)
-    response_was_backfilled = False
+    # 6. quota 부족 → weighted random backfill (이 row 들은 backfilled=true, admin diag 카운터도 ↑)
     if len(selected) < N_RESULTS:
         _request_metrics["backfilled"] += 1
-        response_was_backfilled = True
         for aid, cid in _backfill(db, N_RESULTS - len(selected), seen, lang, rng):
             theta = float(thetas.get(cid, 0.0)) if cid is not None else 0.0
             selected.append((aid, cid, theta, True))
@@ -294,7 +292,6 @@ def _serve(
     )
 
     _record_latency(latency_ms)
-    _ = response_was_backfilled  # 응답 단위 flag 는 admin/diagnostics 누적 카운터로만 사용
     return RecommendItem(articles=[aid for aid, _, _, _ in selected], feed_request_id=feed_request_id)
 
 

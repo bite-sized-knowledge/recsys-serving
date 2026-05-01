@@ -15,6 +15,8 @@ from .service import recommend_feeds, recommend_feeds_anonymous
 
 router = APIRouter()
 
+HEADER_INTEREST_IDS = "X-Interest-Ids"
+
 
 def _parse_interest_ids(raw: Optional[str]) -> Optional[List[int]]:
     """X-Interest-Ids CSV → [int]. invalid 항목은 무시. 결과 비면 None."""
@@ -37,7 +39,7 @@ async def get_recommend_feeds(
     member_id: int | None = None,
     device_id: str | None = None,
     lang: str | None = None,
-    x_interest_ids: str | None = Header(default=None, alias="X-Interest-Ids"),
+    x_interest_ids: str | None = Header(default=None, alias=HEADER_INTEREST_IDS),
     db: Session = Depends(get_db),
     _api_key: str = Depends(verify_api_key),
 ):

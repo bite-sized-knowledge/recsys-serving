@@ -272,34 +272,18 @@ def migrate_device_to_member(db: Session, device_id: str, member_id: int) -> int
     """lazy guest 발급 직후 device_category_bandit → member_category_bandit 이관.
 
     device 가 ground-truth (impression/click 누적). 회원의 새 row 가 prior 만 있으면
-    device 값으로 덮어씀 (해당 (member, category) row 없으면 INSERT).
+    device 값으로 덮어씀. 단일 INSERT ... SELECT — round-trip 1회.
     이관 후 device 흔적은 보존 (분석용) — 추후 retention 정책에 따라 정리.
-    Returns 이관 row 수.
+    Returns 이관 row 수 (driver rowcount).
     """
-    rows = db.execute(
-        text("SELECT category_id, alpha, beta, impressions, clicks FROM device_category_bandit WHERE device_id = :d"),
-        {"d": device_id},
-    ).all()
-    if not rows:
-        return 0
-
-    payload = [
-        {
-            "m": int(member_id),
-            "c": int(r[0]),
-            "a": float(r[1]),
-            "b": float(r[2]),
-            "imp": int(r[3]),
-            "clk": int(r[4]),
-        }
-        for r in rows
-    ]
-    db.execute(
+    result = db.execute(
         text(
             """
             INSERT INTO member_category_bandit
                 (member_id, category_id, alpha, beta, impressions, clicks)
-            VALUES (:m, :c, :a, :b, :imp, :clk)
+            SELECT :m, category_id, alpha, beta, impressions, clicks
+            FROM device_category_bandit
+            WHERE device_id = :d
             ON DUPLICATE KEY UPDATE
                 alpha = VALUES(alpha),
                 beta = VALUES(beta),
@@ -307,10 +291,12 @@ def migrate_device_to_member(db: Session, device_id: str, member_id: int) -> int
                 clicks = member_category_bandit.clicks + VALUES(clicks)
             """
         ),
-        payload,
+        {"m": int(member_id), "d": device_id},
     )
     db.commit()
-    return len(payload)
+    # rowcount: ON DUPLICATE KEY UPDATE 는 INSERT 시 1, UPDATE 시 2 를 더하므로 정확한 row 수 아님.
+    # 정확한 source row 수가 꼭 필요하면 별도 SELECT COUNT 로 가능 — 현재는 진단용이라 raw rowcount 그대로.
+    return int(result.rowcount or 0)
 
 
 def apply_reward_device(db: Session, device_id: str, category_id: int, event_type: str) -> None:
